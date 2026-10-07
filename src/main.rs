@@ -2,7 +2,11 @@ use eframe::egui::{self, Color32, PointerButton, Pos2, Rect, Sense, Stroke};
 use egui::{response};
 use glam::{Mat4, Vec3, Vec4};
 use std::{path::PathBuf, thread::sleep};
- 
+mod ui;
+use ui::menu_bar::{MenuAction, menu_bar};
+use ui::side_panel::{side_panel};
+use ui::viewport::viewport;
+
 fn main() -> eframe::Result {
     // window options
     let options = eframe::NativeOptions {
@@ -21,7 +25,7 @@ fn main() -> eframe::Result {
 }
 
 
-struct Settings {
+pub struct Settings {
     point_size: f32,
     background: [u8; 3],
 }
@@ -61,79 +65,16 @@ impl ViewerApp {
 
     }
 
-    // defines the top menu bar
-    fn menu_bar(&mut self, _ui: &mut egui::Ui){
-        egui::Panel::top("menu").show(_ui, |ui| {
-            // top menu bar
-            egui::MenuBar::new().ui(ui, |ui| {
-                // file menu section
-                ui.menu_button("File", |ui| {
-                    if ui.button("Open").clicked() {
-                        ui.close();
-                        self.open_file_dialog();
-                    }
-                });
-            });
-        });
-    }
-
-    // side panel showing settings and details
-    fn side_panel(&mut self, _ui : &mut egui::Ui) {
-        egui::Panel::left("settings").resizable(true).default_size(260.0).show(_ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading("Point Cloud");
-                if let Some(path) = &self.loaded_file {
-                    let filename = path.file_name().and_then(|name | name.to_str()).unwrap_or("None");
-                    ui.label(format!("Current File : {:?}", filename)); 
-                } else {
-                    ui.label("No File Selected");
-                }
-
-                ui.label(format!("Points : {}", self.point_count));
-
-                ui.separator();
-
-                ui.heading("Rendering");
-                ui.add(
-                    egui::Slider::new(&mut self.settings.point_size,1.0..=8.0).text("Point Size")
-                );
-                ui.horizontal(|ui| {
-                    ui.label("Background");
-                    ui.color_edit_button_srgb(&mut self.settings.background)
-                });
-
-
-            });
-            
-
-
-        });
-    }
-
-    // Central viewport for showing rendered scene
-    fn viewport(&mut self, _ui : &mut egui::Ui) {
-        egui::CentralPanel::default().frame(egui::Frame::NONE).show(_ui, |ui| {
-            // retreive response and painter for specific part of the screen
-            let size = ui.available_size();
-            let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
-
-            // set viewport size to painter area of screen
-            let rect = response.rect;
-            self.viewport_size = [rect.width(), rect.height()];
-
-            painter.rect_filled(rect, 0.0, Color32::from_rgb(self.settings.background[0], self.settings.background[1], self.settings.background[2]))
-        });
-    }
-
-
 }
 
 // renders the viewer app UI
 impl  eframe::App for ViewerApp {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.menu_bar(_ui);
-        self.side_panel(_ui);
-        self.viewport(_ui);
+        if let Some(MenuAction::OpenFile) = menu_bar(_ui) {
+            self.open_file_dialog();
+        }
+        side_panel(_ui, &mut self.settings, self.loaded_file.as_deref(), self.point_count);
+        viewport(_ui, &self.settings, &mut self.viewport_size);
 
 
     }

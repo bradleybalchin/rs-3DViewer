@@ -1,4 +1,4 @@
-use crate::Settings;
+use crate::app::Settings;
 use eframe::egui;
 use std::path::Path;
 

@@ -1,6 +1,6 @@
 
 use eframe::egui::{self, Color32,Sense};
-use crate::Settings;
+use crate::app::Settings;
 
 // Main viewport where rendered scene is shown
 pub fn viewport(_ui : &mut egui::Ui, settings : &Settings, viewport_size : &mut [f32;2]) {

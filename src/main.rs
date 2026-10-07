@@ -1,7 +1,5 @@
-use eframe::egui::{self, Color32, PointerButton, Pos2, Rect, Sense, Stroke};
-use egui::{response};
-use glam::{Mat4, Vec3, Vec4};
-use std::{path::PathBuf, thread::sleep};
+use eframe::egui::{self};
+use std::{path::PathBuf};
 mod ui;
 use ui::menu_bar::{MenuAction, menu_bar};
 use ui::side_panel::{side_panel};

@@ -2,6 +2,7 @@
 use eframe::egui::{self, Color32,Sense};
 use crate::Settings;
 
+// Main viewport where rendered scene is shown
 pub fn viewport(_ui : &mut egui::Ui, settings : &Settings, viewport_size : &mut [f32;2]) {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(_ui, |ui| {
             // retreive response and painter for specific part of the screen

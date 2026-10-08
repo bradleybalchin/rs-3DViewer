@@ -4,7 +4,7 @@ use std::path::Path;
 
 // side panel showing settings and details
 // writes: settings. read-only: loaded file, point count
-pub fn side_panel(ui: &mut egui::Ui, settings: &mut Settings, loaded_file: Option<&Path>, point_count: i32,) 
+pub fn side_panel(ui: &mut egui::Ui, settings: &mut Settings, loaded_file: Option<&Path>, point_count: i32, origin:Option<[f64;3]>) 
 {
     egui::Panel::left("settings").resizable(true).default_size(260.0).show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -17,6 +17,9 @@ pub fn side_panel(ui: &mut egui::Ui, settings: &mut Settings, loaded_file: Optio
             }
 
             ui.label(format!("Points : {}", point_count));
+            if let Some(orig) = origin {
+                ui.label(format!("Local Origin: \nX : {:.2} \nY : {:.2} \nZ : {:.2}", orig[0], orig[1], orig[2] ));
+            }
 
             ui.separator();
 

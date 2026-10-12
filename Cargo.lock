@@ -1697,16 +1697,27 @@ dependencies = [
 
 [[package]]
 name = "las"
-version = "0.11.1"
+version = "0.9.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "987ee68552c50b61259b693e8b4f57b948990754d9ac401ea33cf392b551a018"
+checksum = "48c2594be0d2ec4f04c944f5cb5160625cd1a69451db14de73b990065f97fb84"
 dependencies = [
  "byteorder",
  "chrono",
+ "laz 0.12.2",
  "log",
  "num-traits",
  "thiserror 2.0.21",
  "uuid",
+]
+
+[[package]]
+name = "laz"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4913af39d4e471d749fbcec0d726c5d4fc6f97cac851a62ff7a84300a7a7579"
+dependencies = [
+ "byteorder",
+ "num-traits",
 ]
 
 [[package]]
@@ -2722,7 +2733,7 @@ dependencies = [
  "egui",
  "glam",
  "las",
- "laz",
+ "laz 0.13.0",
  "rayon",
  "rfd",
  "winit",

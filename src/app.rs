@@ -1,4 +1,5 @@
 use crate::ui;
+use crate::filehandling;
 use ui::menu_bar::{MenuAction, menu_bar};
 use ui::side_panel::{side_panel};
 use ui::viewport::viewport;
@@ -23,6 +24,7 @@ impl Default for Settings {
 pub struct ViewerApp {
     loaded_file : Option<PathBuf>,   // current loaded file
     point_count : i32,               // number of points
+    local_origin : Option<[f64;3]>,  // pointcloud local origin
     settings: Settings,              // setttings
     viewport_size: [f32; 2]          // size of viewport (rendered scene view)
 
@@ -36,10 +38,19 @@ impl ViewerApp {
         let picked = rfd::FileDialog::new()
         .add_filter("Point clouds", &["las", "laz", "ply", "xyz", "bin"])
         .pick_file();
-        // if path is picked
+        // if path is picked, select the file as the loaded file
         if let Some(path) = picked {
             println!("picked: {:?}", path);
-            self.loaded_file = Some(path);
+            match filehandling::laz::load(&path) {
+                Ok(msg) => {
+                    // add more to here (storing pointcloud object, local origin etc.)
+                    self.point_count = msg.points.len() as i32;
+                    self.loaded_file = Some(path);
+                    self.local_origin = Some(msg.origin);
+                }
+                Err(e) => eprintln!("Failed to load file {}: {e}", path.display())
+            }
+
         }
         
 
@@ -53,7 +64,7 @@ impl  eframe::App for ViewerApp {
         if let Some(MenuAction::OpenFile) = menu_bar(_ui) {
             self.open_file_dialog();
         }
-        side_panel(_ui, &mut self.settings, self.loaded_file.as_deref(), self.point_count);
+        side_panel(_ui, &mut self.settings, self.loaded_file.as_deref(), self.point_count,self.local_origin);
         viewport(_ui, &self.settings, &mut self.viewport_size);
 
 

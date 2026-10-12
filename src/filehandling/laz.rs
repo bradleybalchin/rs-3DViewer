@@ -37,7 +37,15 @@ pub fn load(path: &Path) -> Result<LoadMessage, las::Error> {
     // parraellel iteration with rayon (par_iter)
     let points : Vec<GpuPoint> = las_points.par_iter()
         .map(|p| {
-            GpuPoint { pos: [p.x as f32,p.y as f32,p.z as f32], color: 0 }
+            GpuPoint { 
+                pos: [p.x as f32,p.y as f32,p.z as f32], 
+                color: if let Some(c) = p.color {   // pack color to u32 if present
+                    pack(c.red, c.green, c.blue)
+                } else {
+                    0
+                }
+            
+             }
         }).collect();
 
     

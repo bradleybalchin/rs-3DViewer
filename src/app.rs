@@ -1,9 +1,11 @@
+use crate::render::vulkan::VulkanRenderer;
 use crate::ui;
 use crate::filehandling;
 use ui::menu_bar::{MenuAction, menu_bar};
 use ui::side_panel::{side_panel};
 use ui::viewport::viewport;
 use eframe::egui::{self};
+use std::ptr::null;
 use std::{path::PathBuf};
 
 pub struct Settings {
@@ -26,11 +28,20 @@ pub struct ViewerApp {
     point_count : i32,               // number of points
     local_origin : Option<[f64;3]>,  // pointcloud local origin
     settings: Settings,              // setttings
-    viewport_size: [f32; 2]          // size of viewport (rendered scene view)
 
+    viewport_size: [f32; 2],         // size of viewport (rendered scene view)
+    renderer: Option<VulkanRenderer>,              // vulkan renderer (None if vulkan failed to initialise)
+    viewport_texture: Option<egui::TextureHandle>, // rendered frame shown in the viewport
 }
 
 impl ViewerApp {
+
+    pub fn new() -> Self {
+        let renderer = VulkanRenderer::new()
+            .map_err(|e| eprintln!("Vulkan unavailable: {e}"))
+            .ok();
+        Self { renderer, ..Default::default() }
+    }
 
     // file dialog for opening a file
     fn open_file_dialog(&mut self){
@@ -65,7 +76,7 @@ impl  eframe::App for ViewerApp {
             self.open_file_dialog();
         }
         side_panel(_ui, &mut self.settings, self.loaded_file.as_deref(), self.point_count,self.local_origin);
-        viewport(_ui, &self.settings, &mut self.viewport_size);
+        viewport(_ui, &self.settings, &mut self.viewport_size, self.renderer.as_mut(), &mut self.viewport_texture);
 
 
     }

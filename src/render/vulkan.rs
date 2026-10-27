@@ -16,10 +16,7 @@ impl VulkanRenderer {
             _entry : entry,
             instance,
             physical_device
-        }
-
-        )
-        
+        })    
     }
 
     // Create the vulkan instance
@@ -42,12 +39,10 @@ impl VulkanRenderer {
 
     // Select physical graphics device being targeted for rendering
     fn select_physical_device(instance : &ash::Instance) -> Result<vk::PhysicalDevice, String> {
-        unsafe {
-            let physical_devices = instance
-                .enumerate_physical_devices()
-                .map_err(|e| format!("failed to enumurate devices : {e}"))?;  
-            
-            
+       
+            let physical_devices = unsafe { instance.enumerate_physical_devices()}
+                .map_err(|e| format!("failed to enumurate devices : {e}"))?;
+               
             println!("{:?} Devices Found", physical_devices.len());
             if physical_devices.is_empty() {
                 return Err("Failed to Find GPU with Vulkan Support".into());
@@ -61,8 +56,7 @@ impl VulkanRenderer {
                 } );
             
             // if no discrete exists just return the first physical device
-            Ok(discrete.unwrap_or(physical_devices[0]))
-        }      
+            Ok(discrete.unwrap_or(physical_devices[0]))   
     }
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], vk::Result>{

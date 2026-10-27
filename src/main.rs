@@ -1,6 +1,7 @@
 mod ui;
 mod app;
 mod filehandling;
+mod render;
 
 fn main() -> eframe::Result {
     // window options

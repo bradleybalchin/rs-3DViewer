@@ -5,20 +5,27 @@ pub struct VulkanRenderer {
     instance : ash::Instance,                // Vulkan Insance
     physical_device : vk::PhysicalDevice,    // phyiscal graphics device (GPU)
     device  : ash::Device,                    // Vulkan Logical Device
+    graphics_queues : Vec<vk::Queue>
 }
 
 impl VulkanRenderer {
     pub fn new() -> Result<Self, String>{
+        // NOTE : coupling between create logical device and get_queues based on number of queues - should be resolved
+
         let (entry, instance) = Self::create_instance()?;
         let physical_device = Self::select_physical_device(&instance)?;
-        let device = Self::create_logical_device(&entry, &instance, physical_device)?;
+        let indices = Self::find_queue_families(&instance, physical_device)?;
+
+        let device = Self::create_logical_device( &instance, &indices, physical_device)?;
+        let graphics_queues = Self::get_queues(&instance, &indices, &device)?;
 
 
         Ok(Self {
             _entry : entry,
             instance,
             physical_device,
-            device
+            device,
+            graphics_queues,
         })    
     }
 
@@ -63,16 +70,17 @@ impl VulkanRenderer {
     }
 
     // Create logical device - interface between physical graphics and application (queue family - group of GPU queues that share same capabilities)
-    fn create_logical_device(entry : &ash::Entry, instance : &ash::Instance, physical_device : vk::PhysicalDevice) -> Result<ash::Device, String> {
-        let indices = Self::FindQueueFamilies(instance, physical_device)?;
+    fn create_logical_device(instance : &ash::Instance, indices : &QueueFamilyIndices, physical_device : vk::PhysicalDevice) -> Result<ash::Device, String> {
+    
         let device_features = unsafe { instance.get_physical_device_features(physical_device) };
 
         let queue_priorities = [1.0f32];
         let graphics_queue_create_info = vk::DeviceQueueCreateInfo::default()
-        .queue_family_index(indices.graphics_family as u32)
+        .queue_family_index(indices.graphics_family)
         .queue_priorities(&queue_priorities);
 
         let queue_create_info = [graphics_queue_create_info];
+
 
         let device_create_info = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queue_create_info)
@@ -93,21 +101,44 @@ impl VulkanRenderer {
         if queue_families.is_empty() { return Err("Failed to Find Queue Families".into()); }
 
     
-        let i = 
+        let i_graphics = 
         queue_families.iter().position(|f| f.queue_flags.contains(QueueFlags::GRAPHICS) && f.queue_count > 0)
         .ok_or("No queue families with graphics support detected")?;
         
-            
-        Ok(QueueFamilyIndices { graphics_family: i, present_family: 0 })
-    }
+        let i_compute = queue_families.iter().position(|f| f.queue_flags.contains(QueueFlags::COMPUTE) && f.queue_count > 0)
+        .ok_or("No queue families with compute support detected")?;
 
+        Ok(QueueFamilyIndices { graphics_family: i_graphics as u32, present_family: 0 as u32, compute_family: i_compute as u32 })
+    }
+    
+    // Gets Queues (just graphics for now)
+    fn get_queues(instance : &ash::Instance, indices : &QueueFamilyIndices, device : &ash::Device) -> Result<Vec<vk::Queue>, String> {
+        // create n queues
+
+        
+        let n = 1;
+        let mut queues: Vec<vk::Queue> = Vec::new();
+        for i in 0..n {
+            let queue_info = vk::DeviceQueueInfo2::default()
+            .queue_family_index(indices.graphics_family)
+            .queue_index(i);
+
+            let queue = unsafe { device.get_device_queue2(&queue_info) };
+            queues.push(queue);
+        }
+
+        Ok(queues)
+
+    }
     
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], vk::Result>{
         todo!()
     }
 }
 
+// Indicies of used Queue Families
 struct QueueFamilyIndices {
-    graphics_family : usize,
-    present_family : usize
+    graphics_family : u32,
+    present_family : u32,
+    compute_family :u32,
 }

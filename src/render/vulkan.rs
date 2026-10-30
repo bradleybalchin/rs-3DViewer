@@ -5,19 +5,16 @@ pub struct VulkanRenderer {
     instance : ash::Instance,                // Vulkan Insance
     physical_device : vk::PhysicalDevice,    // phyiscal graphics device (GPU)
     device  : ash::Device,                    // Vulkan Logical Device
-    graphics_queues : Vec<vk::Queue>
+    queues : Queues                          // Queues retrieved from the logical device
 }
 
 impl VulkanRenderer {
     pub fn new() -> Result<Self, String>{
-        // NOTE : coupling between create logical device and get_queues based on number of queues - should be resolved
-
         let (entry, instance) = Self::create_instance()?;
-        let physical_device = Self::select_physical_device(&instance)?;
-        let indices = Self::find_queue_families(&instance, physical_device)?;
 
-        let device = Self::create_logical_device( &instance, &indices, physical_device)?;
-        let graphics_queues = Self::get_queues(&instance, &indices, &device)?;
+        let physical_device = Self::select_physical_device(&instance)?;             // physical graphics device
+        let indices = Self::find_queue_families(&instance, physical_device)?;   // indices of queue families being used
+        let (device, queues) = Self::create_logical_device( &instance, &indices, physical_device)?;   // vulkan logical graphics device and its queues
 
 
         Ok(Self {
@@ -25,8 +22,8 @@ impl VulkanRenderer {
             instance,
             physical_device,
             device,
-            graphics_queues,
-        })    
+            queues,
+        })
     }
 
     // Create the vulkan instance
@@ -70,11 +67,13 @@ impl VulkanRenderer {
     }
 
     // Create logical device - interface between physical graphics and application (queue family - group of GPU queues that share same capabilities)
-    fn create_logical_device(instance : &ash::Instance, indices : &QueueFamilyIndices, physical_device : vk::PhysicalDevice) -> Result<ash::Device, String> {
+    // Also retrieves the queues created with the device
+    fn create_logical_device(instance : &ash::Instance, indices : &QueueFamilyIndices, physical_device : vk::PhysicalDevice) -> Result<(ash::Device, Queues), String> {
     
         let device_features = unsafe { instance.get_physical_device_features(physical_device) };
 
         let queue_priorities = [1.0f32];
+
         let graphics_queue_create_info = vk::DeviceQueueCreateInfo::default()
         .queue_family_index(indices.graphics_family)
         .queue_priorities(&queue_priorities);
@@ -90,7 +89,18 @@ impl VulkanRenderer {
             instance.create_device(physical_device, &device_create_info, None) 
         }.map_err(|e| format!("Failed to create logical device {e}"))?;
 
-        Ok(device)
+        // Get Graphics Queues
+        let graphics = (0..graphics_queue_create_info.queue_count)
+            .map(|i| unsafe { device.get_device_queue(indices.graphics_family, i) })
+            .collect();
+
+        // TODO : Get Present Queues 
+        let present = Vec::new();
+
+        // TODO : Get Compute Queues 
+        let compute = Vec::new();
+
+        Ok((device, Queues { graphics, present, compute }))
 
     }
 
@@ -111,29 +121,14 @@ impl VulkanRenderer {
         Ok(QueueFamilyIndices { graphics_family: i_graphics as u32, present_family: 0 as u32, compute_family: i_compute as u32 })
     }
     
-    // Gets Queues (just graphics for now)
-    fn get_queues(instance : &ash::Instance, indices : &QueueFamilyIndices, device : &ash::Device) -> Result<Vec<vk::Queue>, String> {
-        // create n queues
-
-        
-        let n = 1;
-        let mut queues: Vec<vk::Queue> = Vec::new();
-        for i in 0..n {
-            let queue_info = vk::DeviceQueueInfo2::default()
-            .queue_family_index(indices.graphics_family)
-            .queue_index(i);
-
-            let queue = unsafe { device.get_device_queue2(&queue_info) };
-            queues.push(queue);
-        }
-
-        Ok(queues)
-
-    }
-    
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], vk::Result>{
         todo!()
     }
+
+
+
+    // TODO : Destroy vulkan objects on dispose
+
 }
 
 // Indicies of used Queue Families
@@ -141,4 +136,11 @@ struct QueueFamilyIndices {
     graphics_family : u32,
     present_family : u32,
     compute_family :u32,
+}
+
+// Queues from the logical device, grouped by role
+struct Queues {
+    graphics : Vec<vk::Queue>,
+    present  : Vec<vk::Queue>,
+    compute  : Vec<vk::Queue>,
 }

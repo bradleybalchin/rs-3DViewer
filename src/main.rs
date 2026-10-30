@@ -16,6 +16,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "3DViewer",
         options,
-        Box::new(|_cc| Ok(Box::new(app::ViewerApp::default()))),
+        Box::new(|_cc| Ok(Box::new(app::ViewerApp::new()))),
     )
 }

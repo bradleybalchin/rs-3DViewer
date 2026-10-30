@@ -87,7 +87,7 @@ impl VulkanRenderer {
     }
 
     // Find queue families for graphics and presentation
-    fn FindQueueFamilies(instance : &ash::Instance, physical_device : vk::PhysicalDevice) -> Result<QueueFamilyIndices, String> {
+    fn find_queue_families(instance : &ash::Instance, physical_device : vk::PhysicalDevice) -> Result<QueueFamilyIndices, String> {
         
         let queue_families = unsafe{instance.get_physical_device_queue_family_properties(physical_device)};
         if queue_families.is_empty() { return Err("Failed to Find Queue Families".into()); }

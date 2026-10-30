@@ -68,11 +68,14 @@ impl VulkanRenderer {
 
     // Create logical device - interface between physical graphics and application (queue family - group of GPU queues that share same capabilities)
     // Also retrieves the queues created with the device
+    // Only does graphics queue for now
     fn create_logical_device(instance : &ash::Instance, indices : &QueueFamilyIndices, physical_device : vk::PhysicalDevice) -> Result<(ash::Device, Queues), String> {
     
         let device_features = unsafe { instance.get_physical_device_features(physical_device) };
 
-        let queue_priorities = [1.0f32];
+
+        // Define queue creation info (for device)
+        let queue_priorities = [1.0f32];    // also determines number of queues created
 
         let graphics_queue_create_info = vk::DeviceQueueCreateInfo::default()
         .queue_family_index(indices.graphics_family)
@@ -80,11 +83,13 @@ impl VulkanRenderer {
 
         let queue_create_info = [graphics_queue_create_info];
 
+        // define and create the logical device
 
         let device_create_info = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queue_create_info)
         .enabled_features(&device_features);
 
+        
         let device = unsafe { 
             instance.create_device(physical_device, &device_create_info, None) 
         }.map_err(|e| format!("Failed to create logical device {e}"))?;

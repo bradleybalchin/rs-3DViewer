@@ -1,4 +1,4 @@
-use ash::vk::{self, DeviceCreateInfo, QueueFlags};
+use ash::{khr::dynamic_rendering, vk::{self, DeviceCreateInfo, QueueFlags}};
 
 pub struct VulkanRenderer {
     _entry : ash::Entry,                     // Vulkan Functions Library
@@ -15,6 +15,8 @@ impl VulkanRenderer {
         let physical_device = Self::select_physical_device(&instance)?;             // physical graphics device
         let indices = Self::find_queue_families(&instance, physical_device)?;   // indices of queue families being used
         let (device, queues) = Self::create_logical_device( &instance, &indices, physical_device)?;   // vulkan logical graphics device and its queues
+        
+
 
 
         Ok(Self {
@@ -33,7 +35,7 @@ impl VulkanRenderer {
 
         let app_info = vk::ApplicationInfo::default()
             .application_name(c"3DViewer")
-            .api_version(vk::API_VERSION_1_2);
+            .api_version(vk::API_VERSION_1_3);
 
         let create_info = vk::InstanceCreateInfo::default()
             .application_info(&app_info);
@@ -59,7 +61,8 @@ impl VulkanRenderer {
             let discrete = physical_devices.iter().copied()
                 .find(|&pd| {
                     let props = unsafe { instance.get_physical_device_properties(pd) };
-                    props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU
+                    props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU &&
+                    props.api_version >= vk::API_VERSION_1_3
                 } );
             
             // if no discrete exists just return the first physical device
@@ -83,11 +86,14 @@ impl VulkanRenderer {
 
         let queue_create_info = [graphics_queue_create_info];
 
-        // define and create the logical device
+        let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
+        .dynamic_rendering(true);
 
+        // define and create the logical device
         let device_create_info = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queue_create_info)
-        .enabled_features(&device_features);
+        .enabled_features(&device_features)
+        .push_next(&mut features13);
 
         
         let device = unsafe { 

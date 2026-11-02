@@ -114,7 +114,7 @@ impl VulkanRenderer {
         
         let queue_families = unsafe{instance.get_physical_device_queue_family_properties(physical_device)};
         if queue_families.is_empty() { return Err("Failed to Find Queue Families".into()); }
-
+        
     
         let i_graphics = 
         queue_families.iter().position(|f| f.queue_flags.contains(QueueFlags::GRAPHICS) && f.queue_count > 0)
@@ -129,11 +129,24 @@ impl VulkanRenderer {
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], vk::Result>{
         todo!()
     }
+}
 
+// Destroy vulkan objects, children before parents (device before instance)
+// _entry is dropped after this runs, keeping the Vulkan library loaded for these calls
+impl Drop for VulkanRenderer {
+    fn drop(&mut self) {
+        unsafe {
+            // Wait for the GPU to finish any submitted work
+            if let Err(e) = self.device.device_wait_idle() {
+                eprintln!("failed to wait for device idle: {e}");
+            }
 
+            
 
-    // TODO : Destroy vulkan objects on dispose
-
+            self.device.destroy_device(None);
+            self.instance.destroy_instance(None);
+        }
+    }
 }
 
 // Indicies of used Queue Families

@@ -17,6 +17,8 @@ pub struct VulkanRenderer {
 
 impl VulkanRenderer {
 
+    // TODO : enable validation layers for debugging
+    // TODO : dispose of previous objects if error occurs during new()
     pub fn new() -> Result<Self, String>{
         const MAX_FRAMES_IN_FLIGHT : u32 = 2;   // number of buffered GPU frames
 

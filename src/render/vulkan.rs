@@ -410,18 +410,23 @@ impl GpuPoint {
 
     pub fn get_binding_description() -> vk::VertexInputBindingDescription {
         vk::VertexInputBindingDescription::default()
+            // index of bindings in the array of bindings
             .binding(0)
+            // bytes per entry
             .stride(std::mem::size_of::<GpuPoint>() as u32)
+            // move to next data entry after each vertex (vs each instance of a vertex)
             .input_rate(vk::VertexInputRate::VERTEX)
     }
 
     pub fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2] {
         [
+            // position
             vk::VertexInputAttributeDescription::default()
                 .binding(0)
                 .location(0)
                 .format(vk::Format::R32G32B32_SFLOAT) // position
                 .offset(std::mem::offset_of!(GpuPoint, pos) as u32),
+            // Colour
             vk::VertexInputAttributeDescription::default()
                 .binding(0)
                 .location(1)

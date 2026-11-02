@@ -1,4 +1,4 @@
-use ash::{vk::{self, DescriptorType, QueueFlags}};
+use ash::vk::{self, DescriptorType, Pipeline, QueueFlags};
 
 pub struct VulkanRenderer {
     _entry : ash::Entry,                     // Vulkan Functions Library
@@ -151,7 +151,46 @@ impl VulkanRenderer {
         .bindings(&bindings);
 
         unsafe { device.create_descriptor_set_layout(&layout_info, None) }
-        .map_err(|e| format!("Failed to create descriptor set layout: {e}"))}
+        .map_err(|e| format!("Failed to create descriptor set layout: {e}"))
+    }
+
+    // Create shader module from SPIR-V code
+    fn create_shader_module(device : &ash::Device, code : &[u8]) -> Result<vk::ShaderModule, String> {
+        let shader_info = vk::ShaderModuleCreateInfo::default()
+        .code(bytemuck::cast_slice(code));
+
+        unsafe { device.create_shader_module(&shader_info, None) }
+        .map_err(|e| format!("Failed to create shader module: {e}"))
+    }
+
+    // Configure shaders and fixed function stages of the graphics pipeline
+    fn create_graphics_pipeline(device : &ash::Device) -> Result<Pipeline, String> {
+        
+        // Load shaders from SPIR-V files
+        let vert_shader_code = include_bytes!("shaders/shader.vert.spv");
+        let frag_shader_code = include_bytes!("shaders/shader.frag.spv");
+
+        let vert_shader_module = Self::create_shader_module(device, vert_shader_code)?;
+        let frag_shader_module = Self::create_shader_module(device, frag_shader_code)?;
+
+        // Shader stage creation
+        let vert_shader_stage_info = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(vert_shader_module)
+        .name(c"main");
+
+        let frag_shader_stage_info = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::FRAGMENT)
+        .module(frag_shader_module)
+        .name(c"main");
+
+        let shader_stages = [vert_shader_stage_info, frag_shader_stage_info];
+
+        
+
+        todo!()
+    }
+
 
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], vk::Result>{

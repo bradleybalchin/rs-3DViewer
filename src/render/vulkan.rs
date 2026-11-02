@@ -1,11 +1,12 @@
-use ash::{khr::dynamic_rendering, vk::{self, DeviceCreateInfo, QueueFlags}};
+use ash::{vk::{self, DescriptorType, QueueFlags}};
 
 pub struct VulkanRenderer {
     _entry : ash::Entry,                     // Vulkan Functions Library
     instance : ash::Instance,                // Vulkan Insance
     physical_device : vk::PhysicalDevice,    // phyiscal graphics device (GPU)
     device  : ash::Device,                    // Vulkan Logical Device
-    queues : Queues                          // Queues retrieved from the logical device
+    queues : Queues,                          // Queues retrieved from the logical device
+    descriptor_set : vk::DescriptorSetLayout,  // descriptor set layout for describing resources to shaders (uniforms, textures, etc.)
 }
 
 impl VulkanRenderer {
@@ -16,7 +17,7 @@ impl VulkanRenderer {
         let indices = Self::find_queue_families(&instance, physical_device)?;   // indices of queue families being used
         let (device, queues) = Self::create_logical_device( &instance, &indices, physical_device)?;   // vulkan logical graphics device and its queues
         
-
+        let descriptor_set = Self::create_descriptor_set_layout(&device)?;  // descriptor set layout for describing resources to shaders (uniforms, textures, etc.)
 
 
         Ok(Self {
@@ -25,6 +26,7 @@ impl VulkanRenderer {
             physical_device,
             device,
             queues,
+            descriptor_set
         })
     }
 
@@ -86,6 +88,7 @@ impl VulkanRenderer {
 
         let queue_create_info = [graphics_queue_create_info];
 
+        // Vulkan 1.3 features - dynamic rendering (allows rendering without a render pass or framebuffer)
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
         .dynamic_rendering(true);
 
@@ -132,6 +135,25 @@ impl VulkanRenderer {
         Ok(QueueFamilyIndices { graphics_family: i_graphics as u32, present_family: 0 as u32, compute_family: i_compute as u32 })
     }
     
+    // Create descriptor set layout for describing resources to shaders (uniforms, textures, etc.)
+    fn create_descriptor_set_layout(device : &ash::Device) -> Result<vk::DescriptorSetLayout, String> {
+
+        let ubo_binding = vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_type(DescriptorType::UNIFORM_BUFFER)
+        .descriptor_count(1)            
+        .stage_flags(vk::ShaderStageFlags::VERTEX);         // vertex shader
+
+        let bindings = [ubo_binding];
+
+        // Create descriptor set layout
+        let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+        .bindings(&bindings);
+
+        unsafe { device.create_descriptor_set_layout(&layout_info, None) }
+        .map_err(|e| format!("Failed to create descriptor set layout: {e}"))}
+
+
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], vk::Result>{
         todo!()
     }
@@ -146,8 +168,6 @@ impl Drop for VulkanRenderer {
             if let Err(e) = self.device.device_wait_idle() {
                 eprintln!("failed to wait for device idle: {e}");
             }
-
-            
 
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);

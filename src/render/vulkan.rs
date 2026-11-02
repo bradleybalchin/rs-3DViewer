@@ -1,33 +1,40 @@
-use std::ptr::null;
-
 use bytemuck::{Pod, Zeroable};
 use ash::vk::{self, DescriptorType, Pipeline, PipelineLayout, QueueFlags};
-use egui::viewport;
 
-use crate::render;
 
 pub struct VulkanRenderer {
-    _entry : ash::Entry,                     // Vulkan Functions Library
-    instance : ash::Instance,                // Vulkan Insance
-    physical_device : vk::PhysicalDevice,    // phyiscal graphics device (GPU)
-    device  : ash::Device,                    // Vulkan Logical Device
-    queues : Queues,                          // Queues retrieved from the logical device
+    _entry : ash::Entry,                              // Vulkan Functions Library
+    instance : ash::Instance,                         // Vulkan Insance
+    physical_device : vk::PhysicalDevice,             // physical graphics device (GPU)
+    device  : ash::Device,                            // Vulkan Logical Device
+    queues : Queues,                                  // Queues retrieved from the logical device
     descriptor_set_layout : vk::DescriptorSetLayout,  // descriptor set layout for describing resources to shaders (uniforms, textures, etc.)
-    graphics_pipeline : Pipeline,
-    graphics_pipeline_layout : PipelineLayout,
+    graphics_pipeline : Pipeline,                     // Graphics pipeline object (shaders and fixed functions stages)
+    graphics_pipeline_layout : PipelineLayout,        // Graphics pipeline layout
+    command_pool : vk::CommandPool,                   // Memory pool command buffers are allocated from
+    command_buffers : Vec<vk::CommandBuffer>          // allocated command buffers
 }
 
 impl VulkanRenderer {
+
     pub fn new() -> Result<Self, String>{
+        const MAX_FRAMES_IN_FLIGHT : u32 = 2;   // number of buffered GPU frames
+
         let (entry, instance) = Self::create_instance()?;
 
         let physical_device = Self::select_physical_device(&instance)?;             // physical graphics device
         let indices = Self::find_queue_families(&instance, physical_device)?;   // indices of queue families being used
         let (device, queues) = Self::create_logical_device( &instance, &indices, physical_device)?;   // vulkan logical graphics device and its queues
         
-        let descriptor_set_layout = Self::create_descriptor_set_layout(&device)?;  // descriptor set layout for describing resources to shaders (uniforms, textures, etc.)
+        // descriptor set layout for describing resources to shaders (uniforms, textures, etc.)
+        let descriptor_set_layout = Self::create_descriptor_set_layout(&device)?;
 
+        // Define the graphics pipline - shaders, descriptor set layouts, and fixed function stages
         let (graphics_pipeline,graphics_pipeline_layout) = Self::create_graphics_pipeline(&device, descriptor_set_layout)?;
+
+        // Create the command pool and allocate command buffers from it.
+        let command_pool = Self::create_command_pool(&device, &indices)?;
+        let command_buffers = Self::create_command_buffers(MAX_FRAMES_IN_FLIGHT, &device, command_pool)?;
 
         Ok(Self {
             _entry : entry,
@@ -38,6 +45,8 @@ impl VulkanRenderer {
             descriptor_set_layout,
             graphics_pipeline,
             graphics_pipeline_layout,
+            command_pool,
+            command_buffers
         })
     }
 
@@ -312,6 +321,34 @@ impl VulkanRenderer {
 
     }
 
+    // memory pool for command buffers to be allocated from
+    fn create_command_pool(device : &ash::Device, indices : &QueueFamilyIndices) -> Result<vk::CommandPool, String> {
+        let pool_info = vk::CommandPoolCreateInfo::default()
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)    // command buffers can be rerecorded individually
+            .queue_family_index(indices.graphics_family);
+
+        unsafe {
+            device.create_command_pool(&pool_info, None)
+            .map_err(|e| format!("Failed to create command pool {e}"))   
+        }
+
+    }
+
+    // Records commands which are submitted to device execution queues
+    // Create a command buffer per frame in flight
+    fn create_command_buffers(max_frames_in_flight:u32, device : &ash::Device, command_pool : vk::CommandPool) -> Result<Vec<vk::CommandBuffer>, String>{
+
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+        .command_pool(command_pool)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_buffer_count(max_frames_in_flight);
+
+        unsafe {
+            device.allocate_command_buffers(&alloc_info)
+            .map_err(|e| format!("Failed to allocate command buffer {e}"))
+        }
+
+    }
 
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], vk::Result>{
@@ -328,6 +365,8 @@ impl Drop for VulkanRenderer {
             if let Err(e) = self.device.device_wait_idle() {
                 eprintln!("failed to wait for device idle: {e}");
             }
+
+            self.device.destroy_command_pool(self.command_pool, None);
 
             self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device.destroy_pipeline_layout(self.graphics_pipeline_layout, None);

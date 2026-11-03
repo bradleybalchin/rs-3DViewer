@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use ash::vk::{self, DescriptorType, Pipeline, PipelineLayout, QueueFlags};
+use ash::{ext::physical_device_drm, vk::{self, DescriptorType, Format, FormatFeatureFlags, ImageTiling, Pipeline, PipelineLayout, QueueFlags}};
 
 
 pub struct VulkanRenderer {
@@ -12,7 +12,9 @@ pub struct VulkanRenderer {
     graphics_pipeline : Pipeline,                     // Graphics pipeline object (shaders and fixed functions stages)
     graphics_pipeline_layout : PipelineLayout,        // Graphics pipeline layout
     command_pool : vk::CommandPool,                   // Memory pool command buffers are allocated from
-    command_buffers : Vec<vk::CommandBuffer>          // allocated command buffers
+    command_buffers : Vec<vk::CommandBuffer>,         // allocated command buffers
+    depth_format : Format,                            // format shared by the pipeline and depth image
+    depth : Option<DepthResources>,                   // depth buffer (None until the render size is known)
 }
 
 impl VulkanRenderer {
@@ -31,8 +33,11 @@ impl VulkanRenderer {
         // descriptor set layout for describing resources to shaders (uniforms, textures, etc.)
         let descriptor_set_layout = Self::create_descriptor_set_layout(&device)?;
 
+        // Depth format is chosen here because the pipeline and the depth image must use the same one
+        let depth_format = Self::find_depth_format(&instance, physical_device)?;
+
         // Define the graphics pipline - shaders, descriptor set layouts, and fixed function stages
-        let (graphics_pipeline,graphics_pipeline_layout) = Self::create_graphics_pipeline(&device, descriptor_set_layout)?;
+        let (graphics_pipeline,graphics_pipeline_layout) = Self::create_graphics_pipeline(&device, descriptor_set_layout, depth_format)?;
 
         // Create the command pool and allocate command buffers from it.
         let command_pool = Self::create_command_pool(&device, &indices)?;
@@ -48,7 +53,9 @@ impl VulkanRenderer {
             graphics_pipeline,
             graphics_pipeline_layout,
             command_pool,
-            command_buffers
+            command_buffers,
+            depth_format,
+            depth : None,           // none until render starts
         })
     }
 
@@ -186,7 +193,7 @@ impl VulkanRenderer {
     }
 
     // Configure shaders and fixed function stages of the graphics pipeline
-    fn create_graphics_pipeline(device : &ash::Device, descriptor_set_layout : vk::DescriptorSetLayout) -> Result<(Pipeline, PipelineLayout), String> {
+    fn create_graphics_pipeline(device : &ash::Device, descriptor_set_layout : vk::DescriptorSetLayout, depth_format : Format) -> Result<(Pipeline, PipelineLayout), String> {
         
         // Load shaders from SPIR-V files
         let vert_shader_code = ash::util::read_spv(&mut std::io::Cursor::new(&include_bytes!("shaders/shader.vert.spv")[..]))
@@ -287,7 +294,7 @@ impl VulkanRenderer {
         let color_formats = [vk::Format::R8G8B8A8_UNORM]; // format of the color attachment
         let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
         .color_attachment_formats(&color_formats)
-        .depth_attachment_format(vk::Format::D32_SFLOAT); // format of the depth attachment
+        .depth_attachment_format(depth_format); // format of the depth attachment
 
         // Graphics pipeline creation
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
@@ -352,6 +359,109 @@ impl VulkanRenderer {
 
     }
 
+    // Resources and memory allocation for the depth buffer
+    // The image is tied to the render size, so it needs recreating when the viewport is resized
+    fn create_depth_resources(instance : &ash::Instance, device : &ash::Device, physical_device : vk::PhysicalDevice, format : Format, width : u32, height : u32) -> Result<DepthResources, String> {
+
+        // Define and create the image
+        let image_info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .format(format)
+        .extent(vk::Extent3D { width, height, depth: 1 })
+        .mip_levels(1)
+        .array_layers(1)
+        .samples(vk::SampleCountFlags::TYPE_1)      // must match the pipeline's rasterization samples
+        .tiling(ImageTiling::OPTIMAL)               // must match the tiling used in find_depth_format
+        .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)   // only used by the graphics queue
+        .initial_layout(vk::ImageLayout::UNDEFINED);
+
+        let image = unsafe { device.create_image(&image_info, None) }
+        .map_err(|e| format!("Failed to create depth image: {e}"))?;
+
+        // Allocate memory for the image and bind it
+        let memory_requirements = unsafe { device.get_image_memory_requirements(image) };
+
+        let memory_type_index = Self::find_memory_type(instance, physical_device, memory_requirements.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL)
+        .map_err(|e| {
+            unsafe { device.destroy_image(image, None) };
+            e
+        })?;
+
+        let alloc_info = vk::MemoryAllocateInfo::default()
+        .allocation_size(memory_requirements.size)
+        .memory_type_index(memory_type_index);
+
+        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
+        .map_err(|e| {
+            unsafe { device.destroy_image(image, None) };
+            format!("Failed to allocate depth image memory: {e}")
+        })?;
+
+        // Define and create the image view
+        let view_info = vk::ImageViewCreateInfo::default()
+        .image(image)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(format)
+        .subresource_range(vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::DEPTH)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1));
+
+        let view = unsafe {
+            device.bind_image_memory(image, memory, 0)
+            .and_then(|_| device.create_image_view(&view_info, None))
+        }.map_err(|e| {
+            unsafe {
+                device.destroy_image(image, None);
+                device.free_memory(memory, None);
+            }
+            format!("Failed to set up depth image: {e}")
+        })?;
+
+        Ok(DepthResources { image, memory, view })
+    }
+
+    // Find a memory type allowed by type_bits that has all of the requested properties
+    fn find_memory_type(instance : &ash::Instance, physical_device : vk::PhysicalDevice, type_bits : u32, properties : vk::MemoryPropertyFlags) -> Result<u32, String> {
+        let memory_properties = unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
+        (0..memory_properties.memory_type_count)
+        .find(|&i| {
+            type_bits & (1 << i) != 0 &&
+            memory_properties.memory_types[i as usize].property_flags.contains(properties)
+        })
+        .ok_or_else(|| "Failed to find a suitable memory type".to_string())
+    }
+
+    // Find a supported depth format for the depth buffer
+    fn find_depth_format(instance : &ash::Instance, physical_device : vk::PhysicalDevice) -> Result<Format, String>{
+        Self::find_supported_format(
+            instance,
+            physical_device,
+            vec![Format::D32_SFLOAT, Format::D32_SFLOAT_S8_UINT, Format::D24_UNORM_S8_UINT],
+            ImageTiling::OPTIMAL,
+            FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT
+        )
+    }
+
+    // find supported format from a list of candidates that matches a correct list of propertiy flags
+    fn find_supported_format(instance : &ash::Instance, physical_device : vk::PhysicalDevice, candidates : Vec<Format>, tiling : ImageTiling, features : FormatFeatureFlags)
+    -> Result<Format, String> {
+        for candidate in candidates {
+            let props = unsafe { instance.get_physical_device_format_properties(physical_device, candidate) };
+            
+            if tiling == ImageTiling::LINEAR && (props.linear_tiling_features & features) == features {
+                return Ok(candidate)
+            } else if tiling == ImageTiling::OPTIMAL && (props.optimal_tiling_features & features) == features  {
+                return Ok(candidate)
+            }
+        }
+
+        Err("Failed to find supported format".into())
+    }
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], vk::Result>{
         todo!()
@@ -366,6 +476,12 @@ impl Drop for VulkanRenderer {
             // Wait for the GPU to finish any submitted work
             if let Err(e) = self.device.device_wait_idle() {
                 eprintln!("failed to wait for device idle: {e}");
+            }
+
+            if let Some(depth) = self.depth.take() {
+                self.device.destroy_image_view(depth.view, None);
+                self.device.destroy_image(depth.image, None);
+                self.device.free_memory(depth.memory, None);
             }
 
             self.device.destroy_command_pool(self.command_pool, None);
@@ -393,6 +509,13 @@ struct Queues {
     graphics : Vec<vk::Queue>,
     present  : Vec<vk::Queue>,
     compute  : Vec<vk::Queue>,
+}
+
+// Depth buffer image, its backing memory, and the view used to attach it when rendering
+struct DepthResources {
+    image : vk::Image,
+    memory : vk::DeviceMemory,
+    view : vk::ImageView,
 }
 
 // single point (position + colour)

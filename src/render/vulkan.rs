@@ -1,10 +1,13 @@
 use bytemuck::{Pod, Zeroable};
-use ash::{ext::physical_device_drm, vk::{self, DescriptorType, Format, FormatFeatureFlags, ImageTiling, Pipeline, PipelineLayout, QueueFlags}};
+use ash::{vk::{self, DescriptorType, Format, FormatFeatureFlags, ImageTiling, Pipeline, PipelineLayout, QueueFlags}};
+use std::ffi::{CStr, c_void};
 
+const VALIDATION_LAYER : &CStr = c"VK_LAYER_KHRONOS_validation";
 
 pub struct VulkanRenderer {
     _entry : ash::Entry,                              // Vulkan Functions Library
     instance : ash::Instance,                         // Vulkan Insance
+    debug_messenger : Option<DebugMessenger>,         // prints validation messages (None if validation is disabled)
     physical_device : vk::PhysicalDevice,             // physical graphics device (GPU)
     device  : ash::Device,                            // Vulkan Logical Device
     queues : Queues,                                  // Queues retrieved from the logical device
@@ -19,12 +22,14 @@ pub struct VulkanRenderer {
 
 impl VulkanRenderer {
 
-    // TODO : enable validation layers for debugging
     // TODO : dispose of previous objects if error occurs during new()
-    pub fn new() -> Result<Self, String>{
+    pub fn new(debug : bool) -> Result<Self, String>{
         const MAX_FRAMES_IN_FLIGHT : u32 = 2;   // number of buffered GPU frames
 
-        let (entry, instance) = Self::create_instance()?;
+        let (entry, instance) = Self::create_instance(debug)?;
+
+        // Prints validation messages, only exists when debug is enabled
+        let debug_messenger = if debug { Some(Self::create_debug_messenger(&entry, &instance)?) } else { None };
 
         let physical_device = Self::select_physical_device(&instance)?;             // physical graphics device
         let indices = Self::find_queue_families(&instance, physical_device)?;   // indices of queue families being used
@@ -43,9 +48,12 @@ impl VulkanRenderer {
         let command_pool = Self::create_command_pool(&device, &indices)?;
         let command_buffers = Self::create_command_buffers(MAX_FRAMES_IN_FLIGHT, &device, command_pool)?;
 
+        // create depth buffer on render since size of window is not known
+
         Ok(Self {
             _entry : entry,
             instance,
+            debug_messenger,
             physical_device,
             device,
             queues,
@@ -59,8 +67,34 @@ impl VulkanRenderer {
         })
     }
 
+    // Check the validation layer is installed
+    fn validation_layer_available(entry : &ash::Entry) -> Result<bool, String> {
+        let layers = unsafe { entry.enumerate_instance_layer_properties() }
+            .map_err(|e| format!("Failed to enumerate instance layers: {e}"))?;
+
+        Ok(layers.iter().any(|layer| layer.layer_name_as_c_str() == Ok(VALIDATION_LAYER)))
+    }
+
+    // Which validation messages to receive and the function that handles them
+    fn debug_messenger_info<'a>() -> vk::DebugUtilsMessengerCreateInfoEXT<'a> {
+        vk::DebugUtilsMessengerCreateInfoEXT::default()
+            .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR)
+            .message_type(vk::DebugUtilsMessageTypeFlagsEXT::GENERAL | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE)
+            .pfn_user_callback(Some(debug_callback))
+    }
+
+    // Create the messenger that sends validation messages to debug_callback
+    fn create_debug_messenger(entry : &ash::Entry, instance : &ash::Instance) -> Result<DebugMessenger, String> {
+        let loader = ash::ext::debug_utils::Instance::new(entry, instance);
+
+        let messenger = unsafe { loader.create_debug_utils_messenger(&Self::debug_messenger_info(), None) }
+            .map_err(|e| format!("Failed to create debug messenger: {e}"))?;
+
+        Ok(DebugMessenger { loader, messenger })
+    }
+
     // Create the vulkan instance
-    fn create_instance() -> Result<(ash::Entry, ash::Instance), String> {
+    fn create_instance(validation : bool) -> Result<(ash::Entry, ash::Instance), String> {
         let entry = unsafe { ash::Entry::load() }
             .map_err(|e| format!("failed to load Vulkan: {e}"))?;
 
@@ -68,8 +102,25 @@ impl VulkanRenderer {
             .application_name(c"3DViewer")
             .api_version(vk::API_VERSION_1_3);
 
-        let create_info = vk::InstanceCreateInfo::default()
+        // These must outlive create_instance, as create_info only stores pointers to them
+        let layer_names = [VALIDATION_LAYER.as_ptr()];
+        let extension_names = [ash::ext::debug_utils::NAME.as_ptr()];
+        let mut debug_info = Self::debug_messenger_info();
+
+        let mut create_info = vk::InstanceCreateInfo::default()
             .application_info(&app_info);
+
+        if validation {
+            if !Self::validation_layer_available(&entry)? {
+                return Err("Validation layer requested but not available".into());
+            }
+
+            // Builder methods return the updated struct, so the result has to be assigned back
+            create_info = create_info
+                .enabled_layer_names(&layer_names)
+                .enabled_extension_names(&extension_names)
+                .push_next(&mut debug_info);    // also reports problems during instance creation and destruction
+        }
 
         let instance = unsafe { entry.create_instance(&create_info, None) }
             .map_err(|e| format!("failed to create instance: {e}"))?;
@@ -463,7 +514,7 @@ impl VulkanRenderer {
         Err("Failed to find supported format".into())
     }
 
-    pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], vk::Result>{
+    pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], String> {
         todo!()
     }
 }
@@ -492,9 +543,36 @@ impl Drop for VulkanRenderer {
             self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
 
             self.device.destroy_device(None);
+
+            if let Some(debug) = self.debug_messenger.take() {
+                debug.loader.destroy_debug_utils_messenger(debug.messenger, None);
+            }
+
             self.instance.destroy_instance(None);
         }
     }
+}
+
+// Called by the validation layer whenever it has a message to report
+unsafe extern "system" fn debug_callback(
+    severity : vk::DebugUtilsMessageSeverityFlagsEXT,
+    message_type : vk::DebugUtilsMessageTypeFlagsEXT,
+    callback_data : *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+    _user_data : *mut c_void,
+) -> vk::Bool32 {
+    let message = unsafe { (*callback_data).message_as_c_str() }
+        .map(CStr::to_string_lossy)
+        .unwrap_or_default();
+
+    eprintln!("[Vulkan {severity:?} {message_type:?}] {message}");
+
+    vk::FALSE  // required return false
+}
+
+// Debug utils function loader and the messenger created from it
+struct DebugMessenger {
+    loader : ash::ext::debug_utils::Instance,
+    messenger : vk::DebugUtilsMessengerEXT,
 }
 
 // Indicies of used Queue Families

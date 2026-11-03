@@ -37,7 +37,7 @@ pub struct ViewerApp {
 impl ViewerApp {
 
     pub fn new() -> Self {
-        let renderer = VulkanRenderer::new()
+        let renderer = VulkanRenderer::new(cfg!(debug_assertions))
             .map_err(|e| eprintln!("Vulkan unavailable: {e}"))
             .ok();
         Self { renderer, ..Default::default() }

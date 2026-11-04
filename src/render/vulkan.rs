@@ -20,7 +20,8 @@ pub struct VulkanRenderer {
     color_format : Format,                            // format shared by pipeline and colour image      
     depth : Option<ImageResources>,                   // depth buffer (None until the render size is known)
     color : Option<ImageResources>,                   // color buffer (Rendered image)
-    readback : Option<ReadbackBuffer>,                // Readback buffer for sending color image to GPU
+    readback : Option<ReadbackBuffer>,                // Readback buffer for sending color image to CPU
+    render_size : (u32,u32),                          // size of render (width, height)
     fence : vk::Fence
 }
 
@@ -74,6 +75,7 @@ impl VulkanRenderer {
             depth : None,           // none until render starts
             color : None,      // none until render starts
             readback : None,
+            render_size : (0,0),
             fence,
         })
     }
@@ -181,7 +183,8 @@ impl VulkanRenderer {
 
         // Vulkan 1.3 features - dynamic rendering (allows rendering without a render pass or framebuffer)
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
-        .dynamic_rendering(true);
+        .dynamic_rendering(true)
+        .synchronization2(true);
 
         // define and create the logical device
         let device_create_info = vk::DeviceCreateInfo::default()
@@ -602,24 +605,210 @@ impl VulkanRenderer {
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], String> {
 
-        
+        // if size changed, update the render targets
+        if self.render_size != (width, height) {
+            self.recreate_render_targets(width, height)?;
+        }
 
-        todo!()
-    }
-}
+        self.record_command_buffer(width, height, clear_color)?;
 
-// Destroy vulkan objects, children before parents (e.g., device before instance)
-// _entry is dropped after this runs, keeping the Vulkan library loaded for these calls
-impl Drop for VulkanRenderer {
-    fn drop(&mut self) {
+        // Submit the commands and wait for the GPU to finish, so the pixels are ready to read
+        let command_buffers = [self.command_buffers[0]];
+        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+
         unsafe {
-            // Wait for the GPU to finish any submitted work
-            if let Err(e) = self.device.device_wait_idle() {
-                eprintln!("failed to wait for device idle: {e}");
-            }
+            self.device.queue_submit(self.queues.graphics[0], &[submit_info], self.fence)
+            .map_err(|e| format!("Failed to submit command buffer: {e}"))?;
 
-            self.device.destroy_fence(self.fence, None);
+            self.device.wait_for_fences(&[self.fence], true, u64::MAX)
+            .map_err(|e| format!("Failed to wait for fence: {e}"))?;
 
+            self.device.reset_fences(&[self.fence])
+            .map_err(|e| format!("Failed to reset fence: {e}"))?;
+        }
+
+        let readback = self.readback.as_ref().ok_or("Readback buffer missing")?;
+        let byte_count = width as usize * height as usize * 4;
+
+        Ok(unsafe { std::slice::from_raw_parts(readback.mapped, byte_count) })
+    }
+
+    // Record the commands for one frame: clear the colour and depth images, then copy the colour image to the readback buffer
+    fn record_command_buffer(&self, width : u32, height : u32, clear_color : [f32; 4]) -> Result<(), String> {
+        let color = self.color.as_ref().ok_or("Color image missing")?;
+        let depth = self.depth.as_ref().ok_or("Depth image missing")?;
+        let readback = self.readback.as_ref().ok_or("Readback buffer missing")?;
+        let cmd = self.command_buffers[0];
+
+        let color_range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+
+        // Barriers on a combined depth stencil format must include both aspects
+        let depth_aspect = if self.depth_format == Format::D32_SFLOAT {
+            vk::ImageAspectFlags::DEPTH
+        } else {
+            vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
+        };
+        let depth_range = vk::ImageSubresourceRange::default()
+            .aspect_mask(depth_aspect)
+            .level_count(1)
+            .layer_count(1);
+
+        // Prepare the images for drawing. Their old contents aren't needed, so the old layout can be UNDEFINED
+        let attachment_barriers = [
+            vk::ImageMemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::NONE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(color.image)
+                .subresource_range(color_range),
+            vk::ImageMemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::NONE)
+                .dst_stage_mask(vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS)
+                .dst_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(depth.image)
+                .subresource_range(depth_range),
+        ];
+        let attachment_dependency = vk::DependencyInfo::default().image_memory_barriers(&attachment_barriers);
+
+        // Clear both images when rendering starts. Colour is kept for the copy, depth isn't needed after the frame
+        let color_attachments = [vk::RenderingAttachmentInfo::default()
+            .image_view(color.view)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .clear_value(vk::ClearValue { color : vk::ClearColorValue { float32 : clear_color } })];
+
+        let depth_attachment = vk::RenderingAttachmentInfo::default()
+            .image_view(depth.view)
+            .image_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .clear_value(vk::ClearValue { depth_stencil : vk::ClearDepthStencilValue { depth : 1.0, stencil : 0 } });
+
+        let rendering_info = vk::RenderingInfo::default()
+            .render_area(vk::Rect2D { offset : vk::Offset2D::default(), extent : vk::Extent2D { width, height } })
+            .layer_count(1)
+            .color_attachments(&color_attachments)
+            .depth_attachment(&depth_attachment);
+
+        // Wait for rendering to finish, then prepare the colour image to be copied from
+        let copy_barriers = [vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+            .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(color.image)
+            .subresource_range(color_range)];
+        let copy_dependency = vk::DependencyInfo::default().image_memory_barriers(&copy_barriers);
+
+        // Row length and image height are left at 0, meaning the pixels are tightly packed in the buffer
+        let copy_region = vk::BufferImageCopy::default()
+            .image_subresource(vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .layer_count(1))
+            .image_extent(Extent3D { width, height, depth : 1 });
+
+        // Make the copied pixels visible to the CPU
+        let host_barriers = [vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::HOST)
+            .dst_access_mask(vk::AccessFlags2::HOST_READ)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .buffer(readback.buffer)
+            .size(vk::WHOLE_SIZE)];
+        let host_dependency = vk::DependencyInfo::default().buffer_memory_barriers(&host_barriers);
+
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            // Beginning also resets the previous frame's recording, as the pool has RESET_COMMAND_BUFFER
+            self.device.begin_command_buffer(cmd, &begin_info)
+            .map_err(|e| format!("Failed to begin command buffer: {e}"))?;
+
+            self.device.cmd_pipeline_barrier2(cmd, &attachment_dependency);
+
+            // Point drawing will go between these two calls
+            self.device.cmd_begin_rendering(cmd, &rendering_info);
+            self.device.cmd_end_rendering(cmd);
+
+            self.device.cmd_pipeline_barrier2(cmd, &copy_dependency);
+            self.device.cmd_copy_image_to_buffer(cmd, color.image, vk::ImageLayout::TRANSFER_SRC_OPTIMAL, readback.buffer, &[copy_region]);
+            self.device.cmd_pipeline_barrier2(cmd, &host_dependency);
+
+            self.device.end_command_buffer(cmd)
+            .map_err(|e| format!("Failed to end command buffer: {e}"))
+        }
+    }
+
+    // update render targets (readbackbuffer, depth, color) for new width / height
+    fn recreate_render_targets(&mut self, width : u32, height : u32) -> Result<(), String> {
+        println!("New Render Size {width} {height}");
+
+        // The old targets can't be destroyed while the GPU is still using them
+        unsafe { self.device.device_wait_idle() }
+        .map_err(|e| format!("Failed to wait for device idle: {e}"))?;
+
+        self.destroy_render_targets();
+
+        // Marks the targets as missing, so if a create below fails the next frame retries instead of using them
+        self.render_size = (0, 0);
+
+        self.color = Some(Self::create_image_resources(
+            &self.instance,
+            &self.device,
+            self.physical_device,
+            self.color_format,
+            width,
+            height,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
+            vk::ImageAspectFlags::COLOR)?);
+
+        self.depth = Some(Self::create_image_resources(
+            &self.instance,
+            &self.device,
+            self.physical_device,
+            self.depth_format,
+            width,
+            height,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            vk::ImageAspectFlags::DEPTH)?);
+
+        // 4 bytes per pixel for RGBA8
+        let readback_size = width as vk::DeviceSize * height as vk::DeviceSize * 4;
+        self.readback = Some(Self::create_readback_buffer(
+            &self.instance,
+            &self.device,
+            self.physical_device,
+            readback_size)?);
+
+        self.render_size = (width, height);
+
+        Ok(())
+    }
+
+    // Destroy the render targets that exist. The GPU must not be using them when this is called
+    fn destroy_render_targets(&mut self) {
+        unsafe {
             if let Some(readback) = self.readback.take() {
                 self.device.unmap_memory(readback.memory);
                 self.device.destroy_buffer(readback.buffer, None);
@@ -637,6 +826,24 @@ impl Drop for VulkanRenderer {
                 self.device.destroy_image(depth.image, None);
                 self.device.free_memory(depth.memory, None);
             }
+        }
+    }
+
+}
+
+// Destroy vulkan objects, children before parents (e.g., device before instance)
+// _entry is dropped after this runs, keeping the Vulkan library loaded for these calls
+impl Drop for VulkanRenderer {
+    fn drop(&mut self) {
+        unsafe {
+            // Wait for the GPU to finish any submitted work
+            if let Err(e) = self.device.device_wait_idle() {
+                eprintln!("failed to wait for device idle: {e}");
+            }
+
+            self.device.destroy_fence(self.fence, None);
+
+            self.destroy_render_targets();
 
             self.device.destroy_command_pool(self.command_pool, None);
 

@@ -21,13 +21,14 @@ pub struct VulkanRenderer {
     depth : Option<ImageResources>,                   // depth buffer (None until the render size is known)
     color : Option<ImageResources>,                   // color buffer (Rendered image)
     readback : Option<ReadbackBuffer>,                // Readback buffer for sending color image to GPU
+    fence : vk::Fence
 }
 
 impl VulkanRenderer {
 
     // TODO : dispose of previous objects if error occurs during new()
     pub fn new(debug : bool) -> Result<Self, String>{
-        const MAX_FRAMES_IN_FLIGHT : u32 = 2;   // number of buffered GPU frames
+        const MAX_FRAMES_IN_FLIGHT : u32 = 1;   // number of buffered GPU frames
 
         let (entry, instance) = Self::create_instance(debug)?;
 
@@ -52,7 +53,8 @@ impl VulkanRenderer {
         let command_pool = Self::create_command_pool(&device, &indices)?;
         let command_buffers = Self::create_command_buffers(MAX_FRAMES_IN_FLIGHT, &device, command_pool)?;
 
-        
+        // fence to synchronise GPU and CPU
+        let fence = Self::create_fence(&device)?;
 
         // create depth, colour, and readback buffer on render since size of window is not known
         Ok(Self {
@@ -72,6 +74,7 @@ impl VulkanRenderer {
             depth : None,           // none until render starts
             color : None,      // none until render starts
             readback : None,
+            fence,
         })
     }
 
@@ -589,12 +592,23 @@ impl VulkanRenderer {
         Ok(ReadbackBuffer { buffer, memory, mapped })
     }
 
+
+    // Create the fence that lets the CPU wait for submitted GPU work to finish
+    fn create_fence(device : &ash::Device) -> Result<vk::Fence, String> {
+        unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
+        .map_err(|e| format!("Failed to create fence: {e}"))
+    }
+
+
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], String> {
+
+        
+
         todo!()
     }
 }
 
-// Destroy vulkan objects, children before parents (device before instance)
+// Destroy vulkan objects, children before parents (e.g., device before instance)
 // _entry is dropped after this runs, keeping the Vulkan library loaded for these calls
 impl Drop for VulkanRenderer {
     fn drop(&mut self) {
@@ -603,6 +617,8 @@ impl Drop for VulkanRenderer {
             if let Err(e) = self.device.device_wait_idle() {
                 eprintln!("failed to wait for device idle: {e}");
             }
+
+            self.device.destroy_fence(self.fence, None);
 
             if let Some(readback) = self.readback.take() {
                 self.device.unmap_memory(readback.memory);

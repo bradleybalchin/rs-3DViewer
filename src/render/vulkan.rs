@@ -17,9 +17,10 @@ pub struct VulkanRenderer {
     command_pool : vk::CommandPool,                   // Memory pool command buffers are allocated from
     command_buffers : Vec<vk::CommandBuffer>,         // allocated command buffers
     depth_format : Format,                            // format shared by the pipeline and depth image
+    color_format : Format,                            // format shared by pipeline and colour image      
     depth : Option<ImageResources>,                   // depth buffer (None until the render size is known)
-    color_format : Format,                                  
-    color_image : Option<ImageResources>
+    color : Option<ImageResources>,                   // color buffer (Rendered image)
+    readback : Option<ReadbackBuffer>,                // Readback buffer for sending color image to GPU
 }
 
 impl VulkanRenderer {
@@ -51,8 +52,9 @@ impl VulkanRenderer {
         let command_pool = Self::create_command_pool(&device, &indices)?;
         let command_buffers = Self::create_command_buffers(MAX_FRAMES_IN_FLIGHT, &device, command_pool)?;
 
-        // create depth buffer on render since size of window is not known
+        
 
+        // create depth, colour, and readback buffer on render since size of window is not known
         Ok(Self {
             _entry : entry,
             instance,
@@ -66,9 +68,10 @@ impl VulkanRenderer {
             command_pool,
             command_buffers,
             depth_format,
-            depth : None,           // none until render starts
             color_format,
-            color_image : None      // none until render starts
+            depth : None,           // none until render starts
+            color : None,      // none until render starts
+            readback : None,
         })
     }
 
@@ -537,9 +540,53 @@ impl VulkanRenderer {
     }
 
 
-    //claude --resume 4941eebc-156a-4844-b769-ade2cffc8350
-    fn create_readback_buffer(){
+    // Create a buffer the rendered image is copied into so the CPU can read its pixels
+    // size - bytes to hold, width * height * 4 for an RGBA8 image, so must be recreated on resize
+    // The memory stays mapped for the buffer's lifetime. The caller is responsible for unmapping and destroying it.
+    fn create_readback_buffer(instance : &ash::Instance, device : &ash::Device, physical_device : vk::PhysicalDevice, size : vk::DeviceSize) -> Result<ReadbackBuffer, String> {
 
+        let buffer_create_info = vk::BufferCreateInfo::default()
+        .size(size)
+        .usage(vk::BufferUsageFlags::TRANSFER_DST)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let buffer = unsafe { device.create_buffer(&buffer_create_info, None)}
+        .map_err(|e| format!("Failed to create readback buffer: {e}"))?;
+
+        let requirements = unsafe {device.get_buffer_memory_requirements(buffer)};
+
+        // Prefer cached memory as CPU reads from uncached memory are slow
+        // Coherent means the memory never needs manually invalidating, and Vulkan guarantees the fallback exists
+        let coherent = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let memory_type_index = Self::find_memory_type(instance, physical_device, requirements.memory_type_bits, coherent | vk::MemoryPropertyFlags::HOST_CACHED)
+        .or_else(|_| Self::find_memory_type(instance, physical_device, requirements.memory_type_bits, coherent))
+        .map_err(|e| {
+            unsafe { device.destroy_buffer(buffer, None) };
+            e
+        })?;
+
+        let alloc_info = vk::MemoryAllocateInfo::default()
+        .allocation_size(requirements.size)
+        .memory_type_index(memory_type_index);
+
+        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
+        .map_err(|e| {
+            unsafe { device.destroy_buffer(buffer, None) };
+            format!("Failed to allocate readback memory: {e}")
+        })?;
+
+        let mapped = unsafe {
+            device.bind_buffer_memory(buffer, memory, 0)
+            .and_then(|_| device.map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty()))
+        }.map_err(|e| {
+            unsafe {
+                device.destroy_buffer(buffer, None);
+                device.free_memory(memory, None);
+            }
+            format!("Failed to set up readback buffer: {e}")
+        })? as *const u8;
+
+        Ok(ReadbackBuffer { buffer, memory, mapped })
     }
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], String> {
@@ -555,6 +602,18 @@ impl Drop for VulkanRenderer {
             // Wait for the GPU to finish any submitted work
             if let Err(e) = self.device.device_wait_idle() {
                 eprintln!("failed to wait for device idle: {e}");
+            }
+
+            if let Some(readback) = self.readback.take() {
+                self.device.unmap_memory(readback.memory);
+                self.device.destroy_buffer(readback.buffer, None);
+                self.device.free_memory(readback.memory, None);
+            }
+
+            if let Some(color) = self.color.take() {
+                self.device.destroy_image_view(color.view, None);
+                self.device.destroy_image(color.image, None);
+                self.device.free_memory(color.memory, None);
             }
 
             if let Some(depth) = self.depth.take() {
@@ -615,6 +674,13 @@ struct Queues {
     graphics : Vec<vk::Queue>,
     present  : Vec<vk::Queue>,
     compute  : Vec<vk::Queue>,
+}
+
+// Buffer the rendered image is copied into, its CPU-visible memory, and the pointer to read it through
+struct ReadbackBuffer {
+    buffer : vk::Buffer,
+    memory : vk::DeviceMemory,
+    mapped : *const u8,
 }
 
 // Image, its backing memory, and the view used to attach it when rendering

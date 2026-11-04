@@ -1,15 +1,8 @@
-use bytemuck::{Pod, Zeroable};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::{path::Path};
 use las::{Reader};
 
-// single point (position + colour)
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub struct GpuPoint {
-    pub pos: [f32; 3], // relative to `origin`
-    pub color: u32,    // packed RGBA8
-}
+use crate::render::vulkan::GpuPoint;
 
 // points and local origin loaded from file
 pub struct LoadMessage {

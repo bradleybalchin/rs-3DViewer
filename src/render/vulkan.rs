@@ -156,8 +156,6 @@ impl VulkanRenderer {
        
             let physical_devices = unsafe { instance.enumerate_physical_devices()}
                 .map_err(|e| format!("failed to enumurate devices : {e}"))?;
-
-            println!("{:?} Devices Found", physical_devices.len());
             if physical_devices.is_empty() {
                 return Err("Failed to Find GPU with Vulkan Support".into());
             }
@@ -1023,7 +1021,7 @@ struct RenderTimings {
 }
 
 impl RenderTimings {
-    const FRAMES_PER_REPORT : u32 = 10;
+    const FRAMES_PER_REPORT : u32 = 60;
 
     // Print the average per frame and start counting again, once enough frames have been added
     fn report_if_due(&mut self) {

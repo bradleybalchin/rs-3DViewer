@@ -1,6 +1,8 @@
 use bytemuck::{Pod, Zeroable};
 use ash::vk::{self, DescriptorType, Extent3D, Format, FormatFeatureFlags, ImageTiling, Pipeline, PipelineLayout, QueueFlags};
+use eframe::wgpu::wgc::resource::CreateExternalTextureError::CreateBuffer;
 use std::ffi::{CStr, c_void};
+use std::time::{Duration, Instant};
 
 const VALIDATION_LAYER : &CStr = c"VK_LAYER_KHRONOS_validation";
 
@@ -22,7 +24,8 @@ pub struct VulkanRenderer {
     color : Option<ImageResources>,                   // color buffer (Rendered image)
     readback : Option<ReadbackBuffer>,                // Readback buffer for sending color image to CPU
     render_size : (u32,u32),                          // size of render (width, height)
-    fence : vk::Fence
+    fence : vk::Fence,
+    timings : RenderTimings,                          // time spent in each part of render()
 }
 
 impl VulkanRenderer {
@@ -57,6 +60,12 @@ impl VulkanRenderer {
         // fence to synchronise GPU and CPU
         let fence = Self::create_fence(&device)?;
 
+        // Vertex Buffer
+
+        // Uniform Buffer
+        
+        // Descriptor Sets and Pools
+
         // create depth, colour, and readback buffer on render since size of window is not known
         Ok(Self {
             _entry : entry,
@@ -77,6 +86,7 @@ impl VulkanRenderer {
             readback : None,
             render_size : (0,0),
             fence,
+            timings : RenderTimings::default(),
         })
     }
 
@@ -602,30 +612,132 @@ impl VulkanRenderer {
         .map_err(|e| format!("Failed to create fence: {e}"))
     }
 
+    /// Creates the vertex buffer - stores vertex data that can be read by the graphics card
+    fn create_vertex_buffer(instance : &ash::Instance, device : &ash::Device, physical_device : vk::PhysicalDevice,
+        command_pool : vk::CommandPool,
+        queue : vk::Queue,
+        vertices : &[GpuPoint]) -> Result<Buffer, String>{
+
+        let bytes : &[u8] = bytemuck::cast_slice(vertices);
+        let size = bytes.len() as vk::DeviceSize;
+        let usage = vk::BufferUsageFlags::TRANSFER_SRC;
+        let properties = vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE;
+
+        // Staging buffer
+        let stage_buffer = Self::create_buffer(instance, device, physical_device, size, usage, properties)?;
+
+        // Copy vertex data into the buffer - mapping buffer memory to CPU accesssible memory
+        unsafe {
+            let mapped = device.map_memory(stage_buffer.memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                .map_err(|e| format!("Failed to set up staging buffer: {e}"))? as *mut u8;
+
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped, bytes.len());   
+            device.unmap_memory(stage_buffer.memory);         
+        }
+
+        // Create the vertex memoy (GPU-local memory)
+        let usage = vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER;
+        let propertes = vk::MemoryPropertyFlags::DEVICE_LOCAL;
+        let vertex_buffer = Self::create_buffer(instance, device, physical_device, size, usage, properties)?;
+
+        // copy vertex data from staging to 
+        Self::copy_buffer(device, command_pool, queue, stage_buffer, vertex_buffer, size);
+
+        // destroy staging buffer
+        unsafe {
+            device.destroy_buffer(stage_buffer.buffer, None);
+            device.free_memory(stage_buffer.memory, None);
+        }
+
+        Ok(vertex_buffer)
+    }
+
+    ///
+    fn create_uniform_buffer(){
+        todo!()
+    }
+
+    ///
+    fn create_descriptor_pool(){
+        todo!()
+    }
+
+    /// Create a buffer object
+    fn create_buffer(instance : &ash::Instance, device : &ash::Device, physical_device : vk::PhysicalDevice,
+        size : u64, 
+        usage : vk::BufferUsageFlags, 
+        properties : vk::MemoryPropertyFlags) -> Result<Buffer, String> {
+
+        let buffer_create_info = vk::BufferCreateInfo::default()
+            .size(size)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let buffer = unsafe {device.create_buffer(&buffer_create_info, None)}
+            .map_err(|e| format!("Failed to create buffer : {e}"))?; 
+
+        let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+        let memory_type_index = Self::find_memory_type(instance, physical_device, requirements.memory_type_bits, properties)?;
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(memory_type_index);
+
+        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
+        .map_err(|e| {
+            unsafe { device.destroy_buffer(buffer, None) };
+            format!("Failed to allocate readback memory: {e}")
+        })?;
+
+        unsafe {
+            device.bind_buffer_memory(buffer, memory, 0)
+        }.map_err(|e| format!("failed to bind buffer memory {e}"))?;
+
+        Ok(Buffer {buffer, memory})
+    }
+
+    // Copy contents of one buffer to another throough a command buffer
+    fn copy_buffer(device : &ash::Device, command_pool : vk::CommandPool, queue : vk::Queue, buffer_src : Buffer, buffer_dst : Buffer, size : u64){
+        todo!()
+    }
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], String> {
+        let start = Instant::now();
 
         // if size changed, update the render targets
         if self.render_size != (width, height) {
             self.recreate_render_targets(width, height)?;
         }
+        let after_resize = Instant::now();
 
         self.record_command_buffer(width, height, clear_color)?;
+        let after_record = Instant::now();
 
         // Submit the commands and wait for the GPU to finish, so the pixels are ready to read
         let command_buffers = [self.command_buffers[0]];
         let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
 
-        unsafe {
+        let (after_submit, after_wait) = unsafe {
             self.device.queue_submit(self.queues.graphics[0], &[submit_info], self.fence)
             .map_err(|e| format!("Failed to submit command buffer: {e}"))?;
+            let after_submit = Instant::now();
 
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)
             .map_err(|e| format!("Failed to wait for fence: {e}"))?;
+            let after_wait = Instant::now();
 
             self.device.reset_fences(&[self.fence])
             .map_err(|e| format!("Failed to reset fence: {e}"))?;
-        }
+
+            (after_submit, after_wait)
+        };
+
+        self.timings.resize += after_resize - start;
+        self.timings.record += after_record - after_resize;
+        self.timings.submit += after_submit - after_record;
+        self.timings.wait += after_wait - after_submit;
+        self.timings.total += start.elapsed();
+        self.timings.frames += 1;
+        self.timings.report_if_due();
 
         let readback = self.readback.as_ref().ok_or("Readback buffer missing")?;
         let byte_count = width as usize * height as usize * 4;
@@ -841,6 +953,7 @@ impl Drop for VulkanRenderer {
                 eprintln!("failed to wait for device idle: {e}");
             }
 
+
             self.device.destroy_fence(self.fence, None);
 
             self.destroy_render_targets();
@@ -899,11 +1012,51 @@ struct Queues {
     compute  : Vec<vk::Queue>,
 }
 
+// Time spent in each part of render(), added up until the next report
+#[derive(Default)]
+struct RenderTimings {
+    frames : u32,
+    resize : Duration,
+    record : Duration,
+    submit : Duration,
+    wait : Duration,
+    total : Duration,
+}
+
+impl RenderTimings {
+    const FRAMES_PER_REPORT : u32 = 10;
+
+    // Print the average per frame and start counting again, once enough frames have been added
+    fn report_if_due(&mut self) {
+        if self.frames < Self::FRAMES_PER_REPORT { return; }
+
+        let average_ms = |time : Duration| time.as_secs_f64() * 1000.0 / self.frames as f64;
+        eprintln!(
+            "[render avg over {} frames] resize {:.3} ms | record {:.3} ms | submit {:.3} ms | gpu wait {:.3} ms | total {:.3} ms",
+            self.frames,
+            average_ms(self.resize),
+            average_ms(self.record),
+            average_ms(self.submit),
+            average_ms(self.wait),
+            average_ms(self.total),
+        );
+
+        *self = Self::default();
+    }
+}
+
 // Buffer the rendered image is copied into, its CPU-visible memory, and the pointer to read it through
+#[derive(Clone, Copy)]
 struct ReadbackBuffer {
     buffer : vk::Buffer,
     memory : vk::DeviceMemory,
     mapped : *const u8,
+}
+
+#[derive(Clone, Copy)]
+struct Buffer {
+    buffer : vk::Buffer,
+    memory : vk::DeviceMemory,
 }
 
 // Image, its backing memory, and the view used to attach it when rendering

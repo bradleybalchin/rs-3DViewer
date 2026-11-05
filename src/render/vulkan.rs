@@ -1,6 +1,5 @@
 use bytemuck::{Pod, Zeroable};
 use ash::vk::{self, DescriptorType, Extent3D, Format, FormatFeatureFlags, ImageTiling, Pipeline, PipelineLayout, QueueFlags};
-use eframe::wgpu::wgc::resource::CreateExternalTextureError::CreateBuffer;
 use std::ffi::{CStr, c_void};
 use std::time::{Duration, Instant};
 
@@ -639,7 +638,7 @@ impl VulkanRenderer {
         let vertex_buffer = Self::create_buffer(instance, device, physical_device, size, usage, properties)?;
 
         // copy vertex data from staging to 
-        Self::copy_buffer(device, command_pool, queue, stage_buffer, vertex_buffer, size);
+        Self::copy_buffer(device, command_pool, queue, stage_buffer.buffer, vertex_buffer.buffer, size)?;
 
         // destroy staging buffer
         unsafe {
@@ -693,9 +692,73 @@ impl VulkanRenderer {
         Ok(Buffer {buffer, memory})
     }
 
-    // Copy contents of one buffer to another throough a command buffer
-    fn copy_buffer(device : &ash::Device, command_pool : vk::CommandPool, queue : vk::Queue, buffer_src : Buffer, buffer_dst : Buffer, size : u64){
-        todo!()
+    /// Copy contents of one buffer to another through a command buffer \ 
+    /// Staging buffer -> vertex buffer
+    fn copy_buffer(device : &ash::Device, command_pool : vk::CommandPool, queue : vk::Queue, buffer_src : vk::Buffer, buffer_dst : vk::Buffer, size : u64)
+    -> Result<(), String>{
+
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_pool(command_pool)
+            .command_buffer_count(1);
+
+        let command_buffer = unsafe {
+            device.allocate_command_buffers(&alloc_info)
+            .map_err(|e| format!("Failed to allocate command buffer {e}"))
+        }?; 
+
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        
+        // Make the copied data readable by the vertex input stage
+        let barriers = [vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COPY)                  // Wait for copy to finish
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)              // Make transfer writes available
+            .dst_stage_mask(vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT)// vertex input waits for copy
+            .dst_access_mask(vk::AccessFlags2::VERTEX_ATTRIBUTE_READ)       // make data visible to vertex read
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .buffer(buffer_dst)
+            .size(vk::WHOLE_SIZE)];
+        let dependency = vk::DependencyInfo::default().buffer_memory_barriers(&barriers);
+
+        // record copy command to command buffer
+        let cmd = command_buffer[0];
+        unsafe {
+            device.begin_command_buffer(cmd, &begin_info)
+                .map_err(|e| format!("Failed to begin command buffer {e}"))?;
+
+            let copy_regions = [vk::BufferCopy2::default()
+                .src_offset(0)
+                .dst_offset(0)
+                .size(size)];
+            let copy_info = vk::CopyBufferInfo2::default()
+                .src_buffer(buffer_src)
+                .dst_buffer(buffer_dst)
+                .regions(&copy_regions);
+
+            device.cmd_copy_buffer2(cmd, &copy_info);
+            device.cmd_pipeline_barrier2(cmd, &dependency); // vertex buffer reads later depend on this (copy being completed)
+            device.end_command_buffer(cmd)
+                .map_err(|e| format!("Failed to end command buffer {e}"))?; 
+        };
+
+        let cmd_submit_infos = [vk::CommandBufferSubmitInfo::default()
+            .command_buffer(cmd)];
+        let submit_infos = [vk::SubmitInfo2::default()
+            .command_buffer_infos(&cmd_submit_infos)];
+
+        unsafe { 
+            device.queue_submit2(queue, &submit_infos, vk::Fence::default())
+                .map_err(|e| format!("Failed to submit queue {e}"))?;
+            device.queue_wait_idle(queue)
+                .map_err(|e| format!("Failed to wait for idle {e}"))?; 
+
+            device.free_command_buffers(command_pool, &command_buffer);
+        };
+
+        Ok(())
+
     }
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], String> {

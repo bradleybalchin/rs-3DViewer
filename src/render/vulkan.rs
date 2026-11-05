@@ -874,7 +874,6 @@ impl VulkanRenderer {
 
     // update render targets (readbackbuffer, depth, color) for new width / height
     fn recreate_render_targets(&mut self, width : u32, height : u32) -> Result<(), String> {
-        println!("New Render Size {width} {height}");
 
         // The old targets can't be destroyed while the GPU is still using them
         unsafe { self.device.device_wait_idle() }

@@ -1,29 +1,53 @@
+//! # Vulkan
+//!
+//! Offscreen Vulkan renderer for the point cloud viewer.
+//!
+//! egui owns the window, so there is no swapchain. Each frame is drawn into a colour image,
+//! copied into a CPU-visible readback buffer, and returned as RGBA8 bytes for the viewport
+//! to show as an egui texture:
+//!
+//! ```text
+//! colour image (GPU) -> readback buffer -> &[u8] -> egui texture
+//! ```
+//!
+//! Uses Vulkan 1.3 with dynamic rendering (no render passes or framebuffers) and
+//! synchronization2 for barriers. Rendering is synchronous: `render()` waits for the GPU to
+//! finish before returning, so only one frame is ever in flight.
+
 use bytemuck::{Pod, Zeroable};
 use ash::vk::{self, DescriptorType, Extent3D, Format, FormatFeatureFlags, ImageTiling, Pipeline, PipelineLayout, QueueFlags};
 use std::ffi::{CStr, c_void};
 use std::time::{Duration, Instant};
+use glam::{Mat4};
 
 const VALIDATION_LAYER : &CStr = c"VK_LAYER_KHRONOS_validation";
 
+/// ## Vulkan Renderer
+///
+/// Owns every Vulkan object used to render the 3D scene, and destroys them all when dropped.
+///
+/// Objects that don't depend on the render size are created in `new()`. The size-dependent
+/// render targets (colour, depth and readback) are created on the first `render()` call,
+/// and recreated whenever the requested size changes.
 pub struct VulkanRenderer {
-    _entry : ash::Entry,                              // Vulkan Functions Library
-    instance : ash::Instance,                         // Vulkan Insance
+    _entry : ash::Entry,                              // loaded Vulkan library, must outlive everything else
+    instance : ash::Instance,                         // connection between the application and Vulkan
     debug_messenger : Option<DebugMessenger>,         // prints validation messages (None if validation is disabled)
-    physical_device : vk::PhysicalDevice,             // physical graphics device (GPU)
-    device  : ash::Device,                            // Vulkan Logical Device
-    queues : Queues,                                  // Queues retrieved from the logical device
-    descriptor_set_layout : vk::DescriptorSetLayout,  // descriptor set layout for describing resources to shaders (uniforms, textures, etc.)
-    graphics_pipeline : Pipeline,                     // Graphics pipeline object (shaders and fixed functions stages)
-    graphics_pipeline_layout : PipelineLayout,        // Graphics pipeline layout
-    command_pool : vk::CommandPool,                   // Memory pool command buffers are allocated from
-    command_buffers : Vec<vk::CommandBuffer>,         // allocated command buffers
-    depth_format : Format,                            // format shared by the pipeline and depth image
-    color_format : Format,                            // format shared by pipeline and colour image      
-    depth : Option<ImageResources>,                   // depth buffer (None until the render size is known)
-    color : Option<ImageResources>,                   // color buffer (Rendered image)
-    readback : Option<ReadbackBuffer>,                // Readback buffer for sending color image to CPU
-    render_size : (u32,u32),                          // size of render (width, height)
-    fence : vk::Fence,
+    physical_device : vk::PhysicalDevice,             // GPU being rendered with
+    device  : ash::Device,                            // logical device, the interface to the GPU that creates most objects
+    queues : Queues,                                  // queues that command buffers are submitted to
+    descriptor_set_layout : vk::DescriptorSetLayout,  // describes the resources shaders can access (uniform buffer)
+    graphics_pipeline : Pipeline,                     // shaders and fixed function state used to draw points
+    graphics_pipeline_layout : PipelineLayout,        // descriptor set layouts and push constants the pipeline uses
+    command_pool : vk::CommandPool,                   // memory pool that command buffers are allocated from
+    command_buffers : Vec<vk::CommandBuffer>,         // command buffers that frames are recorded into
+    depth_format : Format,                            // depth format shared by the pipeline and depth image
+    color_format : Format,                            // colour format shared by the pipeline and colour image
+    depth : Option<ImageResources>,                   // depth image for depth testing (None until the render size is known)
+    color : Option<ImageResources>,                   // colour image the frame is drawn into (None until the render size is known)
+    readback : Option<ReadbackBuffer>,                // CPU-visible buffer the colour image is copied into (None until the render size is known)
+    render_size : (u32,u32),                          // (width, height) of the current render targets, (0, 0) if they don't exist
+    fence : vk::Fence,                                // signalled when the GPU finishes a submitted frame
     timings : RenderTimings,                          // time spent in each part of render()
 }
 
@@ -253,6 +277,14 @@ impl VulkanRenderer {
 
         unsafe { device.create_descriptor_set_layout(&layout_info, None) }
         .map_err(|e| format!("Failed to create descriptor set layout: {e}"))
+    }
+
+    /// Create descriptor pool where desciptor sets are allocated from
+    fn create_descriptor_pool(){
+
+        
+
+        todo!()
     }
 
     // Create shader module from SPIR-V code
@@ -649,14 +681,23 @@ impl VulkanRenderer {
         Ok(vertex_buffer)
     }
 
-    ///
-    fn create_uniform_buffer(){
-        todo!()
-    }
+    /// Create uniform buffers for storing shader uniform values
+    fn create_uniform_buffers(instance : &ash::Instance, device : &ash::Device, physical_device : vk::PhysicalDevice, max_frames_in_flight:u32)
+        -> Result<Vec<Buffer>, String>{
 
-    ///
-    fn create_descriptor_pool(){
-        todo!()
+        let size =  size_of::<UniformBufferObject>() as vk::DeviceSize;
+        let mut uniform_buffers: Vec<Buffer> = vec![];
+        let usage = vk::BufferUsageFlags::UNIFORM_BUFFER;
+        let properties = vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE;
+
+        for _ in 0..max_frames_in_flight {
+            let mut buffer = Self::create_buffer(instance, device, physical_device, size, usage, properties)?;
+            buffer.mapped = unsafe {device.map_memory(buffer.memory, 0, size, vk::MemoryMapFlags::empty())
+                                        .map_err(|e| "Failed to map uniform buffer memory {e}")}? as *const u8;
+            uniform_buffers.push(buffer);
+        }
+        
+        Ok(uniform_buffers)
     }
 
     /// Create a buffer object
@@ -689,8 +730,9 @@ impl VulkanRenderer {
             device.bind_buffer_memory(buffer, memory, 0)
         }.map_err(|e| format!("failed to bind buffer memory {e}"))?;
 
-        Ok(Buffer {buffer, memory})
+        Ok(Buffer {buffer, memory, mapped : std::ptr::null()})
     }
+
 
     /// Copy contents of one buffer to another through a command buffer \ 
     /// Staging buffer -> vertex buffer
@@ -760,6 +802,7 @@ impl VulkanRenderer {
         Ok(())
 
     }
+
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], String> {
         let start = Instant::now();
@@ -1117,13 +1160,28 @@ struct ReadbackBuffer {
 struct Buffer {
     buffer : vk::Buffer,
     memory : vk::DeviceMemory,
+    mapped : *const u8
 }
+
 
 // Image, its backing memory, and the view used to attach it when rendering
 struct ImageResources {
     image : vk::Image,
     memory : vk::DeviceMemory,
     view : vk::ImageView,
+}
+
+// NOTE data in structure needs to be alligned in specific way (https://www.khronos.org/registry/vulkan/specs/1.3-extensions/html/chap15.html#interfaces-resources-layout)
+// must match UBO in shader.vert
+// mat4 is 64 bytes, so 3 in a rpw need no padding
+// C representation -> defined layout. With this layout, the size of items is also stable as long as all fields have a stable size.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct UniformBufferObject
+{
+    model : Mat4,
+    view  : Mat4,
+    proj  : Mat4,
 }
 
 // single point (position + colour)

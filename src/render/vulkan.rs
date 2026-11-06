@@ -89,9 +89,7 @@ impl VulkanRenderer {
         // fence to synchronise GPU and CPU
         let fence = Self::create_fence(&device)?;
 
-        // Vertex Buffer
-        let vertices: [GpuPoint; 0] = [];
-        let vertex_buffer = Self::create_vertex_buffer(&instance, &device, physical_device, command_pool, queues.graphics[0], &vertices)?;
+        // Vertex Buffer - create when vertices are loaded in
 
         // Uniform Buffer
         let uniform_buffers = Self::create_uniform_buffers(&instance, &device, physical_device, MAX_FRAMES_IN_FLIGHT)?;
@@ -128,7 +126,7 @@ impl VulkanRenderer {
             render_size : (0,0),
             fence,
 
-            vertex_buffer,
+            vertex_buffer : None,
             uniform_buffers,
             descriptor_pool,
             descriptor_sets,
@@ -224,8 +222,7 @@ impl VulkanRenderer {
     // Only does graphics queue for now
     fn create_logical_device(instance : &ash::Instance, indices : &QueueFamilyIndices, physical_device : vk::PhysicalDevice) -> Result<(ash::Device, Queues), String> {
     
-        let device_features = unsafe { instance.get_physical_device_features(physical_device) };
-
+        let device_features = unsafe { instance.get_physical_device_features(physical_device).large_points(true) };
 
         // Define queue creation info (for device)
         let queue_priorities = [1.0f32];    // also determines number of queues created
@@ -739,7 +736,7 @@ impl VulkanRenderer {
 
         // Create the vertex memoy (GPU-local memory)
         let usage = vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER;
-        let propertes = vk::MemoryPropertyFlags::DEVICE_LOCAL;
+        let properties = vk::MemoryPropertyFlags::DEVICE_LOCAL;
         let vertex_buffer = Self::create_buffer(instance, device, physical_device, size, usage, properties)?;
 
         // copy vertex data from staging to 
@@ -876,6 +873,31 @@ impl VulkanRenderer {
 
     }
 
+
+    /// Upload vertex data to create a new vertex buffer object from which vertices are rendered from
+    pub fn upload_vertices(&mut self, points: &[GpuPoint])
+        -> Result<(), String>{
+        unsafe {
+            self.device.device_wait_idle().map_err(|e| format!("failed to wait for device idle: {e}"))?;
+            // if a previous vertex buffer exists, destory it
+            if let Some(buffer) = self.vertex_buffer.take() {
+                self.device.destroy_buffer(buffer.buffer, None);
+                self.device.free_memory(buffer.memory, None);
+            }
+
+        }
+        
+        self.vertex_buffer = Self::create_vertex_buffer(
+            &self.instance, 
+            &self.device, 
+            self.physical_device, 
+            self.command_pool, 
+            self.queues.graphics[0], 
+            points)?;
+
+        Ok(())
+
+    }
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], String> {
         let start = Instant::now();

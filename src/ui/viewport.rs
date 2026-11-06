@@ -1,7 +1,8 @@
 
 use eframe::egui::{self, Color32, Rect, Sense, TextureHandle, TextureOptions, pos2};
 use crate::app::Settings;
-use crate::render::vulkan::{GpuPoint, VulkanRenderer};
+use crate::render::renderer::VulkanRenderer;
+use crate::render::vertex::GpuPoint;
 
 /// Main viewport where the rendered scene is shown.
 ///

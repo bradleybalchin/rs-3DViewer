@@ -1,7 +1,7 @@
 use std::path::Path;
 use las::{Reader};
 
-use crate::render::vulkan::GpuPoint;
+use crate::render::vertex::GpuPoint;
 
 // points and local origin loaded from file
 pub struct LoadMessage {

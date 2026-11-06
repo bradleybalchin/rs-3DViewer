@@ -1,5 +1,4 @@
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use std::{path::Path};
+use std::path::Path;
 use las::{Reader};
 
 use crate::render::vulkan::GpuPoint;
@@ -22,24 +21,22 @@ pub fn load(path: &Path) -> Result<LoadMessage, las::Error> {
         (b.min.z + b.max.z) * 0.5,
     ];
 
-    // find total points and create correct sized arrays for points
-    let total_points = reader.header().number_of_points() as usize;
-    let mut las_points: Vec<las::Point> = Vec::with_capacity(total_points);
-    reader.read_all_points_into(&mut las_points)?;
+    // read every point into columnar point data (one column per field)
+    let data = reader.read_all()?;
 
-    // parraellel iteration with rayon (par_iter)
-    let points : Vec<GpuPoint> = las_points.par_iter()
-        .map(|p| {
-            GpuPoint { 
-                pos: [p.x as f32,p.y as f32,p.z as f32], 
-                color: if let Some(c) = p.color {   // pack color to u32 if present
-                    pack(c.red, c.green, c.blue)
-                } else {
-                    0
-                }
-            
-             }
-        }).collect();
+    // positions, zipped from the x, y and z columns
+    let positions = data.x().zip(data.y()).zip(data.z())
+        .map(|((x, y), z)| [x as f32, y as f32, z as f32]);
+
+    // pack colours to u32 if the point format has them, otherwise 0
+    let points: Vec<GpuPoint> = match data.rgb() {
+        Some(rgb) => positions.zip(rgb)
+            .map(|(pos, (r, g, b))| GpuPoint { pos, color: pack(r, g, b) })
+            .collect(),
+        None => positions
+            .map(|pos| GpuPoint { pos, color: 0 })
+            .collect(),
+    };
 
     
     // Return the point and origin

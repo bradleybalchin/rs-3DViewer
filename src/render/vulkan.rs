@@ -895,6 +895,7 @@ impl VulkanRenderer {
             self.queues.graphics[0], 
             points)?;
 
+        println!("[Renderer] {:?} Vertices Loaded", points.len());
         Ok(())
 
     }

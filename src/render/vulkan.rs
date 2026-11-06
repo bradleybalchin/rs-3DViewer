@@ -15,7 +15,7 @@
 //! finish before returning, so only one frame is ever in flight.
 
 use bytemuck::{Pod, Zeroable};
-use ash::vk::{self, DescriptorType, Extent3D, Format, FormatFeatureFlags, ImageTiling, Pipeline, PipelineLayout, QueueFlags};
+use ash::vk::{self, DescriptorSet, DescriptorType, Extent3D, Format, FormatFeatureFlags, ImageTiling, Pipeline, PipelineLayout, QueueFlags};
 use std::ffi::{CStr, c_void};
 use std::time::{Duration, Instant};
 use glam::{Mat4};
@@ -48,6 +48,12 @@ pub struct VulkanRenderer {
     readback : Option<ReadbackBuffer>,                // CPU-visible buffer the colour image is copied into (None until the render size is known)
     render_size : (u32,u32),                          // (width, height) of the current render targets, (0, 0) if they don't exist
     fence : vk::Fence,                                // signalled when the GPU finishes a submitted frame
+
+    vertex_buffer : Option<Buffer>,
+    uniform_buffers : Vec<Buffer>,
+    descriptor_pool : vk::DescriptorPool,
+    descriptor_sets : Vec<vk::DescriptorSet>,
+
     timings : RenderTimings,                          // time spent in each part of render()
 }
 
@@ -84,10 +90,22 @@ impl VulkanRenderer {
         let fence = Self::create_fence(&device)?;
 
         // Vertex Buffer
+        let vertices: [GpuPoint; 0] = [];
+        let vertex_buffer = Self::create_vertex_buffer(&instance, &device, physical_device, command_pool, queues.graphics[0], &vertices)?;
 
         // Uniform Buffer
-        
+        let uniform_buffers = Self::create_uniform_buffers(&instance, &device, physical_device, MAX_FRAMES_IN_FLIGHT)?;
+
         // Descriptor Sets and Pools
+        let descriptor_pool = Self::create_descriptor_pool(&device, MAX_FRAMES_IN_FLIGHT)?;
+        let descriptor_sets = Self::create_descriptor_sets(
+            &device, 
+            MAX_FRAMES_IN_FLIGHT, 
+            descriptor_set_layout, 
+            descriptor_pool, 
+            &uniform_buffers)?;
+
+        
 
         // create depth, colour, and readback buffer on render since size of window is not known
         Ok(Self {
@@ -109,6 +127,12 @@ impl VulkanRenderer {
             readback : None,
             render_size : (0,0),
             fence,
+
+            vertex_buffer,
+            uniform_buffers,
+            descriptor_pool,
+            descriptor_sets,
+
             timings : RenderTimings::default(),
         })
     }
@@ -280,11 +304,57 @@ impl VulkanRenderer {
     }
 
     /// Create descriptor pool where desciptor sets are allocated from
-    fn create_descriptor_pool(){
+    fn create_descriptor_pool(device : &ash::Device, max_frames_in_flight:u32) -> Result<vk::DescriptorPool,String>{
 
+        let pool_sizes = [vk::DescriptorPoolSize::default()
+            .ty(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(max_frames_in_flight)];
+        let pool_create_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&pool_sizes)
+            .max_sets(max_frames_in_flight);
+
+        unsafe {device.create_descriptor_pool(&pool_create_info, None)
+            .map_err(|e| format!("Failed to create descriptor pool {e}")) } 
         
+    }
 
-        todo!()
+    fn create_descriptor_sets(
+        device : &ash::Device, 
+        max_frames_in_flight:u32, 
+        descriptor_set_layout : vk::DescriptorSetLayout, 
+        descriptor_pool : vk::DescriptorPool,
+        uniform_buffers : &[Buffer])
+        -> Result<Vec<DescriptorSet>,String>{
+       
+       let set_layouts = vec![descriptor_set_layout;max_frames_in_flight as usize];
+       let alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&set_layouts);
+
+        let descriptor_sets = unsafe {
+            device.allocate_descriptor_sets(&alloc_info)
+                .map_err(|e| format!("Failed to allocate decriptor sets : {e}"))
+        }?;
+
+        // populate each desciptor set with uniform buffers
+        for i in 0..max_frames_in_flight {
+            let buffer_info = [vk::DescriptorBufferInfo::default()
+                .buffer(uniform_buffers[i as usize].buffer)
+                .offset(0)
+                .range(size_of::<UniformBufferObject>() as u64)];    
+
+            let descriptor_write = vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_sets[i as usize])
+                .dst_binding(0)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&buffer_info);
+
+            unsafe {device.update_descriptor_sets(&[descriptor_write], &[])};
+
+        }
+
+        Ok(descriptor_sets)
     }
 
     // Create shader module from SPIR-V code
@@ -645,8 +715,11 @@ impl VulkanRenderer {
     fn create_vertex_buffer(instance : &ash::Instance, device : &ash::Device, physical_device : vk::PhysicalDevice,
         command_pool : vk::CommandPool,
         queue : vk::Queue,
-        vertices : &[GpuPoint]) -> Result<Buffer, String>{
-
+        vertices : &[GpuPoint]) -> Result<Option<Buffer>, String>{
+        
+        // Do not create buffer if no vertices
+        if vertices.is_empty() {return Ok(None);} 
+        
         let bytes : &[u8] = bytemuck::cast_slice(vertices);
         let size = bytes.len() as vk::DeviceSize;
         let usage = vk::BufferUsageFlags::TRANSFER_SRC;
@@ -678,7 +751,7 @@ impl VulkanRenderer {
             device.free_memory(stage_buffer.memory, None);
         }
 
-        Ok(vertex_buffer)
+        Ok(Some(vertex_buffer))
     }
 
     /// Create uniform buffers for storing shader uniform values
@@ -693,7 +766,7 @@ impl VulkanRenderer {
         for _ in 0..max_frames_in_flight {
             let mut buffer = Self::create_buffer(instance, device, physical_device, size, usage, properties)?;
             buffer.mapped = unsafe {device.map_memory(buffer.memory, 0, size, vk::MemoryMapFlags::empty())
-                                        .map_err(|e| "Failed to map uniform buffer memory {e}")}? as *const u8;
+                                        .map_err(|e| format!("Failed to map uniform buffer memory {e}"))}? as *mut u8;
             uniform_buffers.push(buffer);
         }
         
@@ -1055,7 +1128,20 @@ impl Drop for VulkanRenderer {
             if let Err(e) = self.device.device_wait_idle() {
                 eprintln!("failed to wait for device idle: {e}");
             }
+        
+        
+            self.device.destroy_descriptor_pool(self.descriptor_pool, None);
 
+            for uniform_buffer in &self.uniform_buffers {
+                self.device.unmap_memory(uniform_buffer.memory);
+                self.device.destroy_buffer(uniform_buffer.buffer, None);
+                self.device.free_memory(uniform_buffer.memory, None);
+            }
+            
+            if let Some(vertex) = self.vertex_buffer.take() {
+                self.device.destroy_buffer(vertex.buffer, None);
+                self.device.free_memory(vertex.memory, None);
+            }
 
             self.device.destroy_fence(self.fence, None);
 

@@ -1,6 +1,7 @@
 mod ui;
 mod app;
 mod filehandling;
+mod render;
 
 fn main() -> eframe::Result {
     // window options
@@ -15,6 +16,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "3DViewer",
         options,
-        Box::new(|_cc| Ok(Box::new(app::ViewerApp::default()))),
+        Box::new(|_cc| Ok(Box::new(app::ViewerApp::new()))),
     )
 }

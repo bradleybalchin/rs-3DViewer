@@ -94,7 +94,7 @@ pub(super) fn select_physical_device(instance : &ash::Instance) -> Result<vk::Ph
 // Only does graphics queue for now
 pub(super) fn create_logical_device(instance : &ash::Instance, indices : &QueueFamilyIndices, physical_device : vk::PhysicalDevice) -> Result<(ash::Device, Queues), String> {
 
-    let device_features = unsafe { instance.get_physical_device_features(physical_device).large_points(true) };
+    let device_features = vk::PhysicalDeviceFeatures::default().large_points(true);
 
     // Define queue creation info (for device)
     let queue_priorities = [1.0f32];    // also determines number of queues created

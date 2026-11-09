@@ -38,7 +38,7 @@ fn create_buffer(instance : &ash::Instance, device : &ash::Device, physical_devi
         device.bind_buffer_memory(buffer, memory, 0)
     }.map_err(|e| format!("failed to bind buffer memory {e}"))?;
 
-    Ok(Buffer {buffer, memory, mapped : std::ptr::null()})
+    Ok(Buffer {buffer, memory, mapped : std::ptr::null_mut()})
 }
 
 
@@ -328,5 +328,5 @@ pub(super) struct ReadbackBuffer {
 pub(super) struct Buffer {
     pub(super) buffer : vk::Buffer,
     pub(super) memory : vk::DeviceMemory,
-    pub(super) mapped : *const u8
+    pub(super) mapped : *mut u8
 }

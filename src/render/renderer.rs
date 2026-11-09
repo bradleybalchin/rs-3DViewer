@@ -15,13 +15,14 @@
 //! finish before returning, so only one frame is ever in flight.
 
 use ash::vk::{self, Extent3D, Format, Pipeline, PipelineLayout};
+use glam::{Mat4, Vec3, camera};
 use std::time::{Instant};
 
 use crate::render::context::{self, DebugMessenger, Queues};
 use crate::render::pipeline::{self};
 use crate::render::descriptors::{self};
 use crate::render::resources::{self, ImageResources, ReadbackBuffer, Buffer};
-use crate::render::vertex::{GpuPoint};
+use crate::render::vertex::{GpuPoint, UniformBufferObject};
 use crate::render::command::{self};
 use crate::render::timings::RenderTimings;
 
@@ -53,6 +54,8 @@ pub struct VulkanRenderer {
     fence : vk::Fence,                                // signalled when the GPU finishes a submitted frame
 
     vertex_buffer : Option<Buffer>,
+    point_count : u32,                                // number of points in the vertex buffer
+    scene_radius : f32,                               // distance of the furthest point from the origin, used to frame the camera
     uniform_buffers : Vec<Buffer>,
     descriptor_pool : vk::DescriptorPool,
     descriptor_sets : Vec<vk::DescriptorSet>,
@@ -131,6 +134,8 @@ impl VulkanRenderer {
             fence,
 
             vertex_buffer : None,
+            point_count : 0,
+            scene_radius : 0.0,
             uniform_buffers,
             descriptor_pool,
             descriptor_sets,
@@ -161,9 +166,26 @@ impl VulkanRenderer {
             self.queues.graphics[0], 
             points)?;
 
+        self.point_count = points.len() as u32;
+        self.scene_radius = points.iter().map(|p| Vec3::from(p.pos).length()).fold(0.0, f32::max);
+
         println!("[Renderer] {:?} Vertices Loaded", points.len());
         Ok(())
 
+    }
+
+    // Write the camera matrices for this frame into the uniform buffer
+    // The memory is host coherent and written before the queue submit, so no barrier is needed
+    // Fixed camera for now, placed so the whole point cloud is in view
+    fn update_uniform_buffer(&self, width : u32, height : u32) {
+        let radius = self.scene_radius.max(1.0);
+        let eye = Vec3::new(radius, -radius, radius) * 1.5;
+        let view = camera::rh::view::look_at_mat4(eye, Vec3::ZERO, Vec3::Z);     // LAS is Z up
+        let proj = camera::rh::proj::vulkan::perspective(45f32.to_radians(), width as f32 / height as f32, radius * 0.01, radius * 10.0);   // depth 0..1 and Y down
+
+        let ubo = UniformBufferObject { model : Mat4::IDENTITY, view, proj };
+        let bytes = bytemuck::bytes_of(&ubo);
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.uniform_buffers[0].mapped, bytes.len()) };
     }
 
     pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], String> {
@@ -175,6 +197,7 @@ impl VulkanRenderer {
         }
         let after_resize = Instant::now();
 
+        self.update_uniform_buffer(width, height);
         self.record_command_buffer(width, height, clear_color)?;
         let after_record = Instant::now();
 
@@ -211,7 +234,7 @@ impl VulkanRenderer {
         Ok(unsafe { std::slice::from_raw_parts(readback.mapped, byte_count) })
     }
 
-    // Record the commands for one frame: clear the colour and depth images, then copy the colour image to the readback buffer
+    // Record the commands for one frame: clear the colour and depth images, draw the points, then copy the colour image to the readback buffer
     fn record_command_buffer(&self, width : u32, height : u32, clear_color : [f32; 4]) -> Result<(), String> {
         let color = self.color.as_ref().ok_or("Color image missing")?;
         let depth = self.depth.as_ref().ok_or("Depth image missing")?;
@@ -325,8 +348,22 @@ impl VulkanRenderer {
 
             self.device.cmd_pipeline_barrier2(cmd, &attachment_dependency);
 
-            // Point drawing will go between these two calls
             self.device.cmd_begin_rendering(cmd, &rendering_info);
+
+            // Nothing to draw until a file has been loaded, the frame is just the clear colour
+            if let Some(vertex_buffer) = &self.vertex_buffer {
+                // Positive height, as the projection matrix already flips Y
+                let viewport = vk::Viewport { x : 0.0, y : 0.0, width : width as f32, height : height as f32, min_depth : 0.0, max_depth : 1.0 };
+                let scissor = vk::Rect2D { offset : vk::Offset2D::default(), extent : vk::Extent2D { width, height } };
+
+                self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.graphics_pipeline);
+                self.device.cmd_set_viewport(cmd, 0, &[viewport]);
+                self.device.cmd_set_scissor(cmd, 0, &[scissor]);
+                self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::GRAPHICS, self.graphics_pipeline_layout, 0, &[self.descriptor_sets[0]], &[]);
+                self.device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer.buffer], &[0]);
+                self.device.cmd_draw(cmd, self.point_count, 1, 0, 0);
+            }
+
             self.device.cmd_end_rendering(cmd);
 
             self.device.cmd_pipeline_barrier2(cmd, &copy_dependency);

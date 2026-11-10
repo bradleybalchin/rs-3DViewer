@@ -9,8 +9,13 @@ bytemuck = "1.25.2"
 eframe = "0.37.0"
 egui = "0.37.0"
 glam = { version = "0.34.2", features = ["bytemuck"] }
-las = { version = "0.11.2", features = ["laz"] }
+las = { version = "0.11.2", features = ["laz-parallel"] }
 laz = "0.13.0"
 rayon = "1.12.0"
 rfd = "0.17.2"
 winit = "0.30.13"
+
+[profile.dev.package.laz]
+opt-level = 3
+[profile.dev.package.las]
+opt-level = 3

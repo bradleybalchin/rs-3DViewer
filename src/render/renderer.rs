@@ -15,6 +15,7 @@
 //! finish before returning, so only one frame is ever in flight.
 
 use ash::vk::{self, Extent3D, Format, Pipeline, PipelineLayout};
+use glam::dcamera::lh::view;
 use glam::{Mat4, Vec3, camera};
 use std::time::{Instant};
 
@@ -144,7 +145,10 @@ impl VulkanRenderer {
         })
     }
 
-    
+    pub fn scene_radius(&mut self) -> f32 {
+        self.scene_radius
+    }
+
     /// Upload vertex data to create a new vertex buffer object from which vertices are rendered from
     pub fn upload_vertices(&mut self, points: &[GpuPoint])
         -> Result<(), String>{
@@ -177,18 +181,18 @@ impl VulkanRenderer {
     // Write the camera matrices for this frame into the uniform buffer
     // The memory is host coherent and written before the queue submit, so no barrier is needed
     // Fixed camera for now, placed so the whole point cloud is in view
-    fn update_uniform_buffer(&self, width : u32, height : u32) {
+    fn update_uniform_buffer(&mut self, view: Mat4, proj: Mat4) {
         let radius = self.scene_radius.max(1.0);
         let eye = Vec3::new(radius, -radius, radius) * 1.5;
-        let view = camera::rh::view::look_at_mat4(eye, Vec3::ZERO, Vec3::Z);     // LAS is Z up
-        let proj = camera::rh::proj::vulkan::perspective(45f32.to_radians(), width as f32 / height as f32, radius * 0.01, radius * 10.0);   // depth 0..1 and Y down
+        let view = view;
+        let proj = proj;
 
         let ubo = UniformBufferObject { model : Mat4::IDENTITY, view, proj };
         let bytes = bytemuck::bytes_of(&ubo);
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.uniform_buffers[0].mapped, bytes.len()) };
     }
 
-    pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4]) -> Result<&[u8], String> {
+    pub fn render(&mut self, width: u32, height: u32, clear_color: [f32; 4], view:Mat4, proj: Mat4) -> Result<&[u8], String> {
         let start = Instant::now();
 
         // if size changed, update the render targets
@@ -197,7 +201,7 @@ impl VulkanRenderer {
         }
         let after_resize = Instant::now();
 
-        self.update_uniform_buffer(width, height);
+        self.update_uniform_buffer(view, proj);
         self.record_command_buffer(width, height, clear_color)?;
         let after_record = Instant::now();
 

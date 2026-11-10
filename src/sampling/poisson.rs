@@ -5,11 +5,22 @@
 use crate::render::vertex::GpuPoint;
 
 /// Poisson sample `points` to return subset such that no two points are within radius `r` of eachother
-fn sample(points : &Vec<GpuPoint>, r : f32) -> Result<Vec<GpuPoint>,String>{
+pub fn sample(points : &Vec<GpuPoint>, r : f32) -> Result<Vec<GpuPoint>,String>{
+
+    // Reject negative or NaN values for r
+    if r.is_nan() || r.is_sign_negative() {
+        return Err("r must be positive".into());
+    }
+
+
     Ok(points.clone())
 }
 
-
+/// Calculate distance between two point positions
+/// sqrt ( (x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2 )
+fn dist(v1 : [f32;3], v2 : [f32;3]) -> f32 {
+    v1.iter().zip(v2).map(|(x,y)| (x-y).powi(2)).sum()
+}
 
 #[cfg(test)]
 mod tests {
@@ -18,7 +29,7 @@ mod tests {
 use more_asserts::{self, assert_le};
 use rand::{RngExt, SeedableRng};
     use crate::render::vertex::GpuPoint;
-    use super::sample;
+    use super::{sample,dist};
 
     // generate random GpuPoint vector for testing
     // points are uniform in a cube of side `extent` centred on the origin, with random colours
@@ -76,11 +87,15 @@ use rand::{RngExt, SeedableRng};
         }
     }
 
-    // // r must be a positive f32 value, sample should accept no other values for r
-    // #[test]
-    // fn r_negative_or_nan() {
+    // r must be a positive f32 value, sample should accept no other values for r
+    #[test]
+    fn r_negative_or_nan() {
+        let pnts = gen_test_data(1_000, 42);
 
-    // }
+        assert!(if let Err(s) = sample(&pnts, -1.0) {true} else {false}, "Negative r");
+        assert!(if let Err(s) = sample(&pnts, f32::NAN) {true} else {false}, "NaN r");
+
+    }
 
     // No two points are closer than r
     // #[test]

@@ -63,20 +63,6 @@ pub fn load(path: &Path) -> Result<LoadMessage, las::Error> {
             GpuPoint { pos, color}
         }).collect();
 
-    // // positions relative to the local origin, as real-world coordinates lose precision in f32
-    // let positions = data.x().zip(data.y()).zip(data.z())
-    //     .map(|((x, y), z)| [(x - origin[0]) as f32, (y - origin[1]) as f32, (z - origin[2]) as f32]);
-
-    // // pack colours to u32 if the point format has them, otherwise use white
-    // let points: Vec<GpuPoint> = match data.rgb() {
-    //     Some(rgb) => positions.zip(rgb)
-    //         .map(|(pos, (r, g, b))| GpuPoint { pos, color: pack(r, g, b) })
-    //         .collect(),
-    //     None => positions
-    //         .map(|pos| GpuPoint { pos, color: 0xFFFFFFFF })
-    //         .collect(),
-    // };
-
     let convert_time = convert_start.elapsed();
     let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
     eprintln!(

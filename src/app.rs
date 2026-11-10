@@ -1,5 +1,7 @@
 use crate::ui;
 use crate::filehandling;
+use crate::sampling;
+
 use ui::menu_bar::{MenuAction, menu_bar};
 use ui::side_panel::side_panel;
 use ui::viewport::Viewport;

@@ -52,6 +52,21 @@ pub fn side_panel(ui: &mut egui::Ui, settings: &mut Settings, cloud: Option<&Poi
                 if ui.button("Apply").clicked() {
                     action = Some(SidePanelAction::SamplePoission);
                 }
+            });
+            ui.add_space(1.5);
+
+            ui.label("Voxel Grid Sampling");
+            ui.horizontal(|ui| {
+                ui.label("Resolution");
+                ui.add(
+                    egui::DragValue::new(&mut settings.voxel_resolution)
+                        .speed(0.05)
+                        .range(0.0..=f32::MAX)
+                        .max_decimals(3),
+                );
+                if ui.button("Apply").clicked() {
+                    action = Some(SidePanelAction::SampleVoxelGrid);
+                }
             })
         });
     });
@@ -61,4 +76,5 @@ pub fn side_panel(ui: &mut egui::Ui, settings: &mut Settings, cloud: Option<&Poi
 
 pub enum SidePanelAction {
     SamplePoission,
+    SampleVoxelGrid,
 }

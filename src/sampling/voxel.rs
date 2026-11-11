@@ -3,12 +3,14 @@
 //! Divided into a grid of 3D cells of a specified size/resoltuion
 
 use rustc_hash::FxHashMap;
-
+use std::{time::Instant};
 use crate::render::vertex::GpuPoint;
 
 /// Grid sampling : all points within a voxel are replaced with a single representive point (average of grid members) \
 /// This function is O(N)
 pub fn sample_grid(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<GpuPoint>, String> {
+    let start = Instant::now(); // timing
+    eprintln!("Voxel Grid Sampling res = {:.2}] Beginning Sampling", res);
     // Reject negative or NaN values for resolution
     if res.is_nan() || res.is_sign_negative() {
         return Err("resolution must be positive".into());
@@ -40,12 +42,16 @@ pub fn sample_grid(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<GpuPoint>, 
     }
 
     // return vector from grid with each Accumulator used to caclulate average point for grid space
-    Ok(grid.into_values().map(|a| {
+    let selected: Vec<GpuPoint> = grid.into_values().map(|a| {
         let n = a.n as f64;
         let pos = [(a.sum[0] / n) as f32, (a.sum[1] / n) as f32, (a.sum[2] / n) as f32];
         let c = a.rgba.map(|v| (v / a.n as u64) as u8);
         GpuPoint::new(pos, u32::from_le_bytes(c))
-    }).collect())
+    }).collect();
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+    eprintln!("[Voxel Grid Sampling res = {:.2}] Input Count: {:?} Sample Count: {:?}, Output, Time: {:.1} ms", res, points.len(), selected.len(), ms(start.elapsed()));
+
+    Ok(selected)
 
 }
 

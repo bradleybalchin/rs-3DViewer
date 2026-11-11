@@ -2,7 +2,6 @@
 //! sample input point cloud such that no two points are kept within some min distance r
 //! while points still appear randomly placed rather than grid alligned
 
-use std::collections::HashSet;
 use std::time::Instant;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
@@ -17,7 +16,7 @@ pub fn sample(points : &Vec<GpuPoint>, r : f32) -> Result<Vec<GpuPoint>,String>{
         return Err("r must be positive".into());
     }
 
-    // If not within r of an already selected point, then add to selected, else ignore it from the sample
+    // If not within r of any already selected point, then add to selected, else ignore it from the sample
     let mut selected: Vec<GpuPoint> = Vec::new();
     for p in points.clone() {
         if selected.par_iter().any(|fp| dist(fp.pos, p.pos) < r) { continue;}
@@ -39,13 +38,12 @@ fn dist(v1 : [f32;3], v2 : [f32;3]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::{HashMap, HashSet}, ops::Bound::Excluded};
+    use std::collections::HashSet;
 
 use more_asserts::{self, assert_le};
 use rand::{RngExt, SeedableRng};
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-    use crate::render::vertex::GpuPoint;
-    use super::{sample,dist};
+use crate::render::vertex::GpuPoint;
+use super::{sample,dist};
 
     // generate random GpuPoint vector for testing
     // points are uniform in a cube of side `extent` centred on the origin, with random colours
@@ -108,8 +106,8 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
     fn r_negative_or_nan() {
         let pnts = gen_test_data(1_000, 42);
 
-        assert!(if let Err(s) = sample(&pnts, -1.0) {true} else {false}, "Negative r");
-        assert!(if let Err(s) = sample(&pnts, f32::NAN) {true} else {false}, "NaN r");
+        assert!(if let Err(_) = sample(&pnts, -1.0) {true} else {false}, "Negative r");
+        assert!(if let Err(_) = sample(&pnts, f32::NAN) {true} else {false}, "NaN r");
 
     }
 
@@ -176,5 +174,27 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
         let sample = sample(&pnts, 1.5).unwrap();
         let xs: Vec<f32> = sample.iter().map(|p| p.pos[0]).collect();
         assert_eq!(xs, vec![0.0, 2.0, 4.0]);
+    }
+
+    // if r is zero, then the sample should equal the input 
+    #[test]
+    fn r_zero() {
+        let pnts = gen_test_data(1_000, 42);
+        let r = 0.0f32;
+
+        let sample = sample(&pnts, r).unwrap();
+        assert_eq!(sample.len(), pnts.len(), "Len: sample {:?} != input {:?}", sample.len(), pnts.len());
+        for p in pnts {
+            assert!(sample.contains(&p));
+        }
+    }
+
+    // if r covers the entire pointcloud bounds, then only one point should be include
+    #[test]
+    fn r_larger_than_input(){
+        let pnts = gen_test_data(1_000, 42);
+        let r = f32::MAX;
+        
+        assert_eq!(sample(&pnts, r).unwrap().len(), 1)
     }
 }

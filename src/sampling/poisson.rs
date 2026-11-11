@@ -2,26 +2,57 @@
 //! sample input point cloud such that no two points are kept within some min distance r
 //! while points still appear randomly placed rather than grid alligned
 
-use std::time::Instant;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use std::{time::Instant};
+use rustc_hash::{FxHashMap, FxBuildHasher};
 
 use crate::render::vertex::GpuPoint;
 
 /// Poisson sample `points` to return subset such that no two points are within radius `r` of eachother
 pub fn sample(points : &Vec<GpuPoint>, r : f32) -> Result<Vec<GpuPoint>,String>{
     let start = Instant::now(); // timing
+    eprintln!("[Poission Sampling r = {:.2}] Beginning Sampling", r);
 
     // Reject negative or NaN values for r
     if r.is_nan() || r.is_sign_negative() {
         return Err("r must be positive".into());
     }
+    if r == 0.0 {return  Ok(points.to_vec());} // when r = 0 every point is kept
 
-    // If not within r of any already selected point, then add to selected, else ignore it from the sample
+    let r2 = r*r;   // compare squares to avoid sqrts in loop
+
+    // spacial grid with cell size c = r, allows for neighbor checking in O(1) time
+    //      any point within r of p must lie in p's cell or one of its 26 neighbours -> check 3x3x3 block (27 lookups)
+    //      (Bridson's c = r/sqrt(3) gives at most one point per cell but needs a 5x5x5 block = 125 lookups)
+    //      points kept >= r apart can only pack a bounded number into an r-sized cell, so each bucket stays small
+    let c = r;
+    let mut grid: FxHashMap<[i32;3], Vec<usize>> = FxHashMap::with_hasher(FxBuildHasher);
     let mut selected: Vec<GpuPoint> = Vec::new();
-    for p in points.clone() {
-        if selected.par_iter().any(|fp| dist(fp.pos, p.pos) < r) { continue;}
-        selected.push(p);
+
+    // map positions to cell
+    let cell = |p:[f32;3]| {
+        [(p[0] / c).floor() as i32,(p[1] / c).floor() as i32,(p[2] / c).floor() as i32]
+    };
+    
+
+    'points : for p in points {
+        let k = cell(p.pos);
+        for dx in -1..=1{            // check the 3x3x3 area
+            for dy in -1..=1{
+                for dz in -1..=1 {
+                    if let Some (bucket) = grid.get(&[k[0] + dx, k[1] + dy, k[2] + dz]) {
+                        // if some grid space in 3x3x3 bucket contains an point closer than r , then conintue (dont include in output)
+                        for &i in bucket{
+                           if dist2(selected[i].pos, p.pos) < r2 {continue 'points;} 
+                        }
+                    }
+                }
+            }
+        }
+        // add new point to selected and index added to spacial grid
+        grid.entry(k).or_default().push(selected.len());
+        selected.push(*p);
     }
+
 
     let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
     eprintln!("[Poission Sampling r = {:.2}] Input Count: {:?} Sample Count: {:?}, Output, Time: {:.1} ms", r, points.len(), selected.len(), ms(start.elapsed()));
@@ -32,8 +63,14 @@ pub fn sample(points : &Vec<GpuPoint>, r : f32) -> Result<Vec<GpuPoint>,String>{
 
 /// Calculate distance between two point positions
 /// sqrt ( (x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2 )
+#[cfg(test)]
 fn dist(v1 : [f32;3], v2 : [f32;3]) -> f32 {
     v1.iter().zip(v2).map(|(x, y)| (x-y).powi(2)).sum::<f32>().sqrt()
+}
+
+/// Calculate distance between two point positions and return the squared result r2
+fn dist2(v1 : [f32;3], v2 : [f32;3]) -> f32 {
+    v1.iter().zip(v2).map(|(x, y)| (x-y).powi(2)).sum::<f32>()
 }
 
 #[cfg(test)]
@@ -176,7 +213,24 @@ use super::{sample,dist};
         assert_eq!(xs, vec![0.0, 2.0, 4.0]);
     }
 
-    // if r is zero, then the sample should equal the input 
+    // Grid-accelerated sample must match the brute-force greedy reference exactly (same points, same order)
+    #[test]
+    fn matches_brute_force_reference(){
+        let rs = [0.1, 0.5, 1.0, 2.0, 3.7, 5.0, 10.0, 33.3, 100.0];
+        for seed in [1, 42, 1234] {
+            let pnts = gen_test_data(2_000, seed);
+            for r in rs {
+                let mut expected: Vec<GpuPoint> = Vec::new();
+                for p in &pnts {
+                    if !expected.iter().any(|s| dist(s.pos, p.pos) < r) { expected.push(*p); }
+                }
+                let got = sample(&pnts, r).unwrap();
+                assert!(got == expected, "seed={seed} r={r}: grid kept {} points, brute force kept {}", got.len(), expected.len());
+            }
+        }
+    }
+
+    // if r is zero, then the sample should equal the input
     #[test]
     fn r_zero() {
         let pnts = gen_test_data(1_000, 42);

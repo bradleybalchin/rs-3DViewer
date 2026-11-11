@@ -17,25 +17,13 @@ pub fn sample_grid(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<GpuPoint>, 
     }
     if res == 0.0 {return Ok(points.clone())}
 
-
-    // Spacial hash grid for 0(1) lookup
-    let mut grid: FxHashMap<[i32;3], Acc> = FxHashMap::default();
-
-
-    // min corner of the point cloud bounding box - grid is anchored here so voxel boundaries
-    // line up with the cloud rather than the origin (result is unchanged if the cloud is translated)
-    let min = points.iter().fold([f32::INFINITY; 3], |m, p| {
-        [m[0].min(p.pos[0]), m[1].min(p.pos[1]), m[2].min(p.pos[2])]
-    });
-
-    // map positions to cell (relative to min corner, so all indices are >= 0)
-    let cell = |p:[f32;3]| {
-        [((p[0] - min[0]) / res).floor() as i32,((p[1] - min[1]) / res).floor() as i32,((p[2] - min[2]) / res).floor() as i32]
-    };
+    // create voxel grid (vg provides cell mappings for hashmap)
+    let vg = VoxelGrid::new(points, res);
+    let mut grid: FxHashMap<[i32; 3], Acc> = FxHashMap::default();
 
     // for each point, find grid cell and add position and colour to accumulator for that grid cell
     for p in points {
-        let a = grid.entry(cell(p.pos)).or_default();
+        let a = grid.entry(vg.cell(p.pos)).or_default();
         for i in 0..3 { a.sum[i] += p.pos[i] as f64;}
         for (i, b) in p.color.to_le_bytes().iter().enumerate() { a.rgba[i] += *b as u64;}      
         a.n += 1;      
@@ -53,6 +41,28 @@ pub fn sample_grid(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<GpuPoint>, 
 
     Ok(selected)
 
+}
+
+// Voxel grid, finds min value for bounding and performs cell mapping
+#[derive(Clone, Copy)]
+pub struct VoxelGrid { min: [f32; 3], res: f32 }
+
+impl VoxelGrid {
+    pub fn new(points: &[GpuPoint], res: f32) -> Self {
+        let min = points.iter().fold([f32::INFINITY; 3], |m, p| {
+            [m[0].min(p.pos[0]), m[1].min(p.pos[1]), m[2].min(p.pos[2])]
+        });
+        Self { min, res }
+    }
+
+    // inline - optimise by replacing function call with copy of funciton body at compile time
+    /// Map float positions to voxel grid cells
+    #[inline]
+    pub fn cell(&self, p: [f32; 3]) -> [i32; 3] {
+        [((p[0] - self.min[0]) / self.res).floor() as i32,
+         ((p[1] - self.min[1]) / self.res).floor() as i32,
+         ((p[2] - self.min[2]) / self.res).floor() as i32]
+    }
 }
 
 

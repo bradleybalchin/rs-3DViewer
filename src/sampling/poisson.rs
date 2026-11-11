@@ -7,7 +7,8 @@ use rustc_hash::{FxHashMap, FxBuildHasher};
 
 use crate::render::vertex::GpuPoint;
 
-/// Poisson sample `points` to return subset such that no two points are within radius `r` of eachother
+/// Poisson sample `points` to return subset such that no two points are within radius `r` of eachother \
+/// This function is O(N)
 pub fn sample(points : &Vec<GpuPoint>, r : f32) -> Result<Vec<GpuPoint>,String>{
     let start = Instant::now(); // timing
     eprintln!("[Poission Sampling r = {:.2}] Beginning Sampling", r);
@@ -76,11 +77,10 @@ fn dist2(v1 : [f32;3], v2 : [f32;3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
-
-use more_asserts::{self, assert_le};
-use rand::{RngExt, SeedableRng};
-use crate::render::vertex::GpuPoint;
-use super::{sample,dist};
+    use more_asserts::{self, assert_le};
+    use rand::{RngExt, SeedableRng};
+    use crate::render::vertex::GpuPoint;
+    use super::{sample,dist};
 
     // generate random GpuPoint vector for testing
     // points are uniform in a cube of side `extent` centred on the origin, with random colours

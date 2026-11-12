@@ -5,6 +5,8 @@
 use rustc_hash::FxHashMap;
 use std::{time::Instant};
 use crate::render::vertex::GpuPoint;
+use crate::math::eigenvalues;
+use glam::{DVec3};
 
 /// Grid sampling : all points within a voxel are replaced with a single representive point (average of grid members) \
 /// This function is O(N)
@@ -58,10 +60,71 @@ pub fn sample_feature_aware(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<Gp
     let vg = VoxelGrid::new(points, res);
     let mut grid: FxHashMap<[i32; 3], Acc> = FxHashMap::default();
 
+    // covariance matrix calulation
+    //  Var(x)      Cov(x,y)    Cov(x,z)
+    //  Cov(x,y)    Var(y)      Cov(y,z)
+    //  Cov(z,x)    Cov(z,y)    Var(z)           
 
+    // sym_eigenvalues([xx, xy, xz, yy, yz, zz]
+    // var = sum((xi-mean)^2) / N
+    // cov = sum((xi-xmean) (yi-ymean)) / N-1
+    // use positions relative to the cell corner to avoid covariance losing precision
+
+    // from sums of products (for single pass covariance calculating)
+    // (x-xm) (y-ym) = xy - xym - yxm + mxmy
+    // sum((x-xm) (y-ym)) = sum(xy) - sum(x)ym - sum(y)xm + n*xmym
+    //                      = sum(xy) n*xmym - n*xmym + n*xmym
+    //                      = sum(xy) - n*xmym
+    // cov(x,y) = (sum(xy) / n) - xmym
+    // average of products minus product of avarages
+
+    // PASS 1: for each point, find grid cell and update sums
+    //  positions are taken relative to the cell corner (d = p - corner) in f64, so the sums of products precise
+    for p in points {
+        let key = vg.cell(p.pos);
+        let d = DVec3::new(p.pos[0] as f64, p.pos[1] as f64, p.pos[2] as f64) - vg.corner(key);
+
+        let a = grid.entry(key).or_default();
+        a.n += 1;
+        a.sum[0] += d.x;
+        a.sum[1] += d.y;
+        a.sum[2] += d.z;
+        a.psum[0] += d.x * d.x;   // xx
+        a.psum[1] += d.x * d.y;   // xy
+        a.psum[2] += d.x * d.z;   // xz
+        a.psum[3] += d.y * d.y;   // yy
+        a.psum[4] += d.y * d.z;   // yz
+        a.psum[5] += d.z * d.z;   // zz
+    }
+
+    // BETWEEN PASSES: classify each cell as flat or feature from its covariance eigenvalues
+    let cells: FxHashMap<[i32; 3], Cell> = grid.into_iter().map(|(key, a)| {
+        let n = a.n as f64;
+        let m = DVec3::from_array(a.sum) / n;     // mean, relative to cell corner
+
+        // cov = average of products - product of averages
+        let cov = [
+            a.psum[0] / n - m.x * m.x,   // xx
+            a.psum[1] / n - m.x * m.y,   // xy
+            a.psum[2] / n - m.x * m.z,   // xz
+            a.psum[3] / n - m.y * m.y,   // yy
+            a.psum[4] / n - m.y * m.z,   // yz
+            a.psum[5] / n - m.z * m.z,   // zz
+        ];
+
+        // too few points for a reliable covariance -> treat as flat (one representative)
+        let feature = a.n >= MIN_FEATURE_POINTS && surface_variation(cov) > SIGMA_THRESHOLD;
+        (key, Cell { centroid: m, feature })
+    }).collect();
+
+    // PASS 2: choose representatives using `cells`
+    //  - flat cell: the input point nearest `centroid` (relative to vg.corner(key))
+    //  - feature cell: keep extra detail (e.g. nearest point per sub-cell)
+    let _ = cells;
 
 
     Ok(points.clone())
+
 }
 
 // Voxel grid, finds min value for bounding and performs cell mapping
@@ -76,6 +139,17 @@ impl VoxelGrid {
         Self { min, res }
     }
 
+    /// Position of a cell's minimum corner, in f64
+    #[inline]
+    pub fn corner(&self, key: [i32; 3]) -> DVec3 {
+        let res = self.res as f64;
+        DVec3::new(
+            self.min[0] as f64 + key[0] as f64 * res,
+            self.min[1] as f64 + key[1] as f64 * res,
+            self.min[2] as f64 + key[2] as f64 * res,
+        )
+    }
+
     // inline - optimise by replacing function call with copy of funciton body at compile time
     /// Map float positions to voxel grid cells
     #[inline]
@@ -87,9 +161,35 @@ impl VoxelGrid {
 }
 
 
+/// Minimum points in a cell for its covariance to be trusted; below this a cell is treated as flat
+const MIN_FEATURE_POINTS: u32 = 5;
+
+/// Surface variation above which a cell counts as a feature.
+/// Flat plane ~0 up to 1/3 (random scatter in all directions)
+const SIGMA_THRESHOLD: f64 = 0.02;
+
+/// Classification of one grid cell after pass 1
+struct Cell {
+    centroid: DVec3, // mean position, relative to the cell corner
+    feature: bool,   // true if the cell is not flat (edge, corner, scatter)
+}
+
+/// Surface variation σ = λ3 / (λ1 + λ2 + λ3) of a covariance matrix [xx, xy, xz, yy, yz, zz].
+/// 0 for a perfect plane (or line), up to 1/3 for isotropic scatter.
+fn surface_variation(cov: [f64; 6]) -> f64 {
+    let [l1, l2, l3] = eigenvalues::sym_eigenvalues(cov).map(|l| l.max(0.0)); // rounding can give tiny negatives
+    let sum = l1 + l2 + l3;
+    if sum > 0.0 { l3 / sum } else { 0.0 } // sum = 0: all points identical
+}
+
 // Accmulation of posisitions and colour values for a grid cell (n is number of points)
 #[derive(Default)]
-struct Acc { sum: [f64; 3], rgba: [u64; 4], n: u32 }
+struct Acc { 
+    sum: [f64; 3],  // sum of positions
+    rgba: [u64; 4], // sum of rgb byte values
+    n: u32,         // number of points
+    psum : [f64;6]  // sum of products of positions (for covariance calculations) (xx,xy,xz,yy,yz,zz)
+}
 
 #[cfg(test)]
 mod tests {
@@ -215,6 +315,36 @@ mod tests {
     }
 
     // - -
+
+    // covariance [xx, xy, xz, yy, yz, zz] of a set of positions
+    fn covariance(pts: &[[f64; 3]]) -> [f64; 6] {
+        let n = pts.len() as f64;
+        let m = pts.iter().fold([0.0; 3], |s, p| [s[0] + p[0], s[1] + p[1], s[2] + p[2]]).map(|v| v / n);
+        let mut c = [0.0; 6];
+        for p in pts {
+            let d = [p[0] - m[0], p[1] - m[1], p[2] - m[2]];
+            let t = [d[0] * d[0], d[0] * d[1], d[0] * d[2], d[1] * d[1], d[1] * d[2], d[2] * d[2]];
+            for i in 0..6 { c[i] += t[i] / n; }
+        }
+        c
+    }
+
+    // SIGMA_THRESHOLD separates a flat cell from an edge cell (one unit voxel of each)
+    #[test]
+    fn surface_variation_flat_vs_edge() {
+        use super::{surface_variation, SIGMA_THRESHOLD};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(31);
+
+        let flat: Vec<[f64; 3]> = (0..200).map(|_| [rng.random_range(0.0..1.0), rng.random_range(0.0..1.0), 0.0]).collect();
+        let edge: Vec<[f64; 3]> = (0..200).map(|i| {
+            let (a, b) = (rng.random_range(0.0..1.0), rng.random_range(0.0..1.0));
+            if i % 2 == 0 { [a, b, 0.0] } else { [a, 0.0, b] } // floor or wall
+        }).collect();
+
+        let (s_flat, s_edge) = (surface_variation(covariance(&flat)), surface_variation(covariance(&edge)));
+        assert!(s_flat < SIGMA_THRESHOLD, "flat cell sigma {s_flat}");
+        assert!(s_edge > SIGMA_THRESHOLD, "edge cell sigma {s_edge}");
+    }
 
     // Empty input is valid and gives empty output
     #[test]

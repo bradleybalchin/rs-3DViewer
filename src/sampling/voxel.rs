@@ -67,7 +67,7 @@ pub fn sample_feature_aware(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<Gp
 
     // sym_eigenvalues([xx, xy, xz, yy, yz, zz]
     // var = sum((xi-mean)^2) / N
-    // cov = sum((xi-xmean) (yi-ymean)) / N-1
+    // cov = sum((xi-xmean) (yi-ymean)) / N
     // use positions relative to the cell corner to avoid covariance losing precision
 
     // from sums of products (for single pass covariance calculating)
@@ -118,12 +118,57 @@ pub fn sample_feature_aware(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<Gp
     }).collect();
 
     // PASS 2: choose representatives using `cells`
-    //  - flat cell: the input point nearest `centroid` (relative to vg.corner(key))
-    //  - feature cell: keep extra detail (e.g. nearest point per sub-cell)
-    let _ = cells;
+    //  each point competes for a "slot" - the slot keeps the real input point nearest its target
+    //  flat cell:    one slot per cell, target = cell centroid
+    //  feature cell: SUB^3 slots per cell (one per sub-cell), target = sub-cell centroid (4 subdivisions = 64 slots)
+    let sub_res = res as f64 / SUBDIVISIONS as f64;
+    // finds slots a point competes for
+    let slot_of = |p: &GpuPoint| -> (Slot, DVec3, &Cell) {
+        let key = vg.cell(p.pos);
+        let d = DVec3::new(p.pos[0] as f64, p.pos[1] as f64, p.pos[2] as f64) - vg.corner(key);
+        let cell = &cells[&key];
+        let sub = if cell.feature { sub_index(d, sub_res) } else { 0 };
+        ((key, sub), d, cell)
+    };
 
+    // PASS 2a: sub-cell centroids (feature cells only) - sum of d and count per sub-cell
 
-    Ok(points.clone())
+    // point count and sum of positions per cell
+    let mut sub_sums: FxHashMap<Slot, (DVec3, u32)> = FxHashMap::default();
+    for p in points {
+        let (slot, d, cell) = slot_of(p);
+        if cell.feature {
+            let s = sub_sums.entry(slot).or_insert((DVec3::ZERO, 0));
+            s.0 += d;
+            s.1 += 1;
+        }
+    }
+
+    // calc centroids (average position) for all subdivisions in slots
+    let sub_centroids: FxHashMap<Slot, DVec3> = sub_sums.into_iter()
+        .map(|(slot, (sum, n))| (slot, sum / n as f64))
+        .collect();
+
+    // PASS 2b: for each slot keep the point nearest its target (distance^2, index into points)
+    let mut best: FxHashMap<Slot, (f64, usize)> = FxHashMap::default();
+    for (i, p) in points.iter().enumerate() {
+        let (slot, d, cell) = slot_of(p);
+        // target is centroid of subdivision (if feature) or of the cell (if non-feature)
+        let target = if cell.feature { sub_centroids[&slot] } else { cell.centroid };
+        let d2 = d.distance_squared(target);
+
+        match best.get_mut(&slot) {
+            None => { best.insert(slot, (d2, i)); }
+            Some(b) => if closer(d2, p, b.0, &points[b.1]) { *b = (d2, i); },
+        }
+    }
+
+    let selected: Vec<GpuPoint> = best.into_values().map(|(_, i)| points[i]).collect();
+
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+    eprintln!("[Feature Aware Sampling res = {:.2}] Input Count: {:?} Sample Count: {:?}, Output, Time: {:.1} ms", res, points.len(), selected.len(), ms(start.elapsed()));
+
+    Ok(selected)
 
 }
 
@@ -167,6 +212,32 @@ const MIN_FEATURE_POINTS: u32 = 5;
 /// Surface variation above which a cell counts as a feature.
 /// Flat plane ~0 up to 1/3 (random scatter in all directions)
 const SIGMA_THRESHOLD: f64 = 0.02;
+
+/// Feature cells are split into SUBDIVISIONS^3 sub-cells, each keeping one point.
+/// Higher keeps more detail at edges/corners (and more points).
+const SUBDIVISIONS: u16 = 4;
+
+/// A representative slot: (cell key, sub-cell index). Flat cells only use sub-cell 0.
+type Slot = ([i32; 3], u16);
+
+/// Index of the sub-cell containing `d` (position relative to the cell corner), sub-cells of size `sub_res`.
+/// Clamped because f32 rounding in `VoxelGrid::cell` can leave d fractionally outside [0, res].
+fn sub_index(d: DVec3, sub_res: f64) -> u16 {
+    let max = (SUBDIVISIONS - 1) as f64;
+    let s = (d / sub_res).floor().clamp(DVec3::ZERO, DVec3::splat(max));
+    (s.x as u16 * SUBDIVISIONS + s.y as u16) * SUBDIVISIONS + s.z as u16
+}
+
+/// True if candidate `p` (distance^2 `d2` from target) should replace the current best.
+/// Ties broken on position then colour, never on input index, so the result is independent of input order.
+fn closer(d2: f64, p: &GpuPoint, best_d2: f64, best: &GpuPoint) -> bool {
+    d2.total_cmp(&best_d2)
+        .then_with(|| p.pos[0].total_cmp(&best.pos[0]))
+        .then_with(|| p.pos[1].total_cmp(&best.pos[1]))
+        .then_with(|| p.pos[2].total_cmp(&best.pos[2]))
+        .then_with(|| p.color.cmp(&best.color))
+        .is_lt()
+}
 
 /// Classification of one grid cell after pass 1
 struct Cell {

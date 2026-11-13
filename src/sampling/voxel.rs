@@ -6,6 +6,7 @@ use rustc_hash::FxHashMap;
 use std::{time::Instant};
 use crate::render::vertex::GpuPoint;
 use crate::math::eigenvalues;
+use crate::math::grid::VoxelGrid;
 use glam::{DVec3};
 
 /// Grid sampling : all points within a voxel are replaced with a single representive point (average of grid members) \
@@ -170,39 +171,6 @@ pub fn sample_feature_aware(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<Gp
 
     Ok(selected)
 
-}
-
-// Voxel grid, finds min value for bounding and performs cell mapping
-#[derive(Clone, Copy)]
-pub struct VoxelGrid { min: [f32; 3], res: f32 }
-
-impl VoxelGrid {
-    pub fn new(points: &[GpuPoint], res: f32) -> Self {
-        let min = points.iter().fold([f32::INFINITY; 3], |m, p| {
-            [m[0].min(p.pos[0]), m[1].min(p.pos[1]), m[2].min(p.pos[2])]
-        });
-        Self { min, res }
-    }
-
-    /// Position of a cell's minimum corner, in f64
-    #[inline]
-    pub fn corner(&self, key: [i32; 3]) -> DVec3 {
-        let res = self.res as f64;
-        DVec3::new(
-            self.min[0] as f64 + key[0] as f64 * res,
-            self.min[1] as f64 + key[1] as f64 * res,
-            self.min[2] as f64 + key[2] as f64 * res,
-        )
-    }
-
-    // inline - optimise by replacing function call with copy of funciton body at compile time
-    /// Map float positions to voxel grid cells
-    #[inline]
-    pub fn cell(&self, p: [f32; 3]) -> [i32; 3] {
-        [((p[0] - self.min[0]) / self.res).floor() as i32,
-         ((p[1] - self.min[1]) / self.res).floor() as i32,
-         ((p[2] - self.min[2]) / self.res).floor() as i32]
-    }
 }
 
 

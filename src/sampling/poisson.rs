@@ -5,6 +5,7 @@
 use std::{time::Instant};
 use rustc_hash::{FxHashMap, FxBuildHasher};
 
+use crate::math::grid::VoxelGrid;
 use crate::render::vertex::GpuPoint;
 
 /// Poisson sample `points` to return subset such that no two points are within radius `r` of eachother \
@@ -25,27 +26,17 @@ pub fn sample(points : &Vec<GpuPoint>, r : f32) -> Result<Vec<GpuPoint>,String>{
     //      any point within r of p must lie in p's cell or one of its 26 neighbours -> check 3x3x3 block (27 lookups)
     //      (Bridson's c = r/sqrt(3) gives at most one point per cell but needs a 5x5x5 block = 125 lookups)
     //      points kept >= r apart can only pack a bounded number into an r-sized cell, so each bucket stays small
-    let c = r;
+    let vg = VoxelGrid::new(points, r);
     let mut grid: FxHashMap<[i32;3], Vec<usize>> = FxHashMap::with_hasher(FxBuildHasher);
     let mut selected: Vec<GpuPoint> = Vec::new();
 
-    // map positions to cell
-    let cell = |p:[f32;3]| {
-        [(p[0] / c).floor() as i32,(p[1] / c).floor() as i32,(p[2] / c).floor() as i32]
-    };
-    
-
     'points : for p in points {
-        let k = cell(p.pos);
-        for dx in -1..=1{            // check the 3x3x3 area
-            for dy in -1..=1{
-                for dz in -1..=1 {
-                    if let Some (bucket) = grid.get(&[k[0] + dx, k[1] + dy, k[2] + dz]) {
-                        // if some grid space in 3x3x3 bucket contains an point closer than r , then conintue (dont include in output)
-                        for &i in bucket{
-                           if dist2(selected[i].pos, p.pos) < r2 {continue 'points;} 
-                        }
-                    }
+        let k = vg.cell(p.pos);
+        for n in VoxelGrid::neighbours(k) {            // check the 3x3x3 area
+            if let Some (bucket) = grid.get(&n) {
+                // if some grid space in 3x3x3 bucket contains an point closer than r , then conintue (dont include in output)
+                for &i in bucket{
+                   if dist2(selected[i].pos, p.pos) < r2 {continue 'points;}
                 }
             }
         }

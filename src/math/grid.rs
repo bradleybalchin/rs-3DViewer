@@ -8,17 +8,17 @@
 
 use glam::DVec3;
 
-use crate::render::vertex::GpuPoint;
-
 /// Voxel grid, finds min value for bounding and performs cell mapping
 #[derive(Clone, Copy)]
 pub struct VoxelGrid { min: [f32; 3], res: f32 }
 
 impl VoxelGrid {
-    /// Grid of cells with side `res`, anchored at the min corner of `points`
-    pub fn new(points: &[GpuPoint], res: f32) -> Self {
-        let min = points.iter().fold([f32::INFINITY; 3], |m, p| {
-            [m[0].min(p.pos[0]), m[1].min(p.pos[1]), m[2].min(p.pos[2])]
+    /// Grid of cells with side `res`, anchored at the min corner of `positions`. \
+    /// Takes any iterator of positions so callers don't copy the cloud, e.g.
+    /// `VoxelGrid::new(points.iter().map(|p| p.pos), res)` or `VoxelGrid::new(positions.iter().copied(), res)`
+    pub fn new(positions: impl IntoIterator<Item = [f32; 3]>, res: f32) -> Self {
+        let min = positions.into_iter().fold([f32::INFINITY; 3], |m, p| {
+            [m[0].min(p[0]), m[1].min(p[1]), m[2].min(p[2])]
         });
         Self { min, res }
     }
@@ -53,6 +53,15 @@ impl VoxelGrid {
     }
 }
 
+// Accmulation of posisitions and colour values for a grid cell (n is number of points)
+#[derive(Default)]
+pub struct Acc { 
+    pub sum: [f64; 3],  // sum of positions
+    pub rgba: [u64; 4], // sum of rgb byte values
+    pub n: u32,         // number of points
+    pub psum : [f64;6]  // sum of products of positions (for covariance calculations) (xx,xy,xz,yy,yz,zz)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -72,7 +81,7 @@ mod tests {
     #[test]
     fn grid_anchored_at_min() {
         let pnts = gen_points(1_000, 1);
-        let vg = VoxelGrid::new(&pnts, 2.0);
+        let vg = VoxelGrid::new(pnts.iter().map(|p| p.pos), 2.0);
         assert_eq!(vg.cell(vg.min), [0, 0, 0]);
         for p in &pnts {
             assert!(vg.cell(p.pos).iter().all(|&i| i >= 0), "{:?} -> {:?}", p.pos, vg.cell(p.pos));
@@ -84,7 +93,7 @@ mod tests {
     fn grid_point_inside_its_cell() {
         let pnts = gen_points(1_000, 2);
         for res in [0.3f32, 1.0, 7.5] {
-            let vg = VoxelGrid::new(&pnts, res);
+            let vg = VoxelGrid::new(pnts.iter().map(|p| p.pos), res);
             for p in &pnts {
                 let c = vg.corner(vg.cell(p.pos));
                 let pos = [p.pos[0] as f64, p.pos[1] as f64, p.pos[2] as f64];
@@ -112,7 +121,7 @@ mod tests {
     // Empty input must not panic
     #[test]
     fn grid_empty_input() {
-        let vg = VoxelGrid::new(&[], 1.0);
+        let vg = VoxelGrid::new(std::iter::empty(), 1.0);
         let _ = vg.corner([0, 0, 0]);
     }
 }

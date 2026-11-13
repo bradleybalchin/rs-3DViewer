@@ -26,7 +26,7 @@ pub fn sample(points : &Vec<GpuPoint>, r : f32) -> Result<Vec<GpuPoint>,String>{
     //      any point within r of p must lie in p's cell or one of its 26 neighbours -> check 3x3x3 block (27 lookups)
     //      (Bridson's c = r/sqrt(3) gives at most one point per cell but needs a 5x5x5 block = 125 lookups)
     //      points kept >= r apart can only pack a bounded number into an r-sized cell, so each bucket stays small
-    let vg = VoxelGrid::new(points, r);
+    let vg = VoxelGrid::new(points.iter().map(|p| p.pos), r);
     let mut grid: FxHashMap<[i32;3], Vec<usize>> = FxHashMap::with_hasher(FxBuildHasher);
     let mut selected: Vec<GpuPoint> = Vec::new();
 

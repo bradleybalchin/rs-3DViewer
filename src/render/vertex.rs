@@ -34,6 +34,10 @@ impl GpuPoint {
         Self { pos, color }
     }
 
+    pub fn positions() {
+        
+    }
+
     pub fn get_binding_description() -> vk::VertexInputBindingDescription {
         vk::VertexInputBindingDescription::default()
             // index of bindings in the array of bindings

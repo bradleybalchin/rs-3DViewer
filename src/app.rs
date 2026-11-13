@@ -127,7 +127,7 @@ impl ViewerApp {
     // Perform feature aware voxel sampling and render the reduced pointcloud sample
     fn sample_voxel_fa(&mut self){
         if let Some(cloud) = &self.cloud{
-            match voxel::sample_feature_aware(&cloud.points, self.settings.voxel_resolution) {
+            match voxel::sample_feature_aware(&cloud.points, self.settings.voxel_fa_resolution) {
                 Ok(pnts) => {
                     if let Err(e) = self.viewport.set_points(&pnts) {
                         eprintln!("Failed to upload points: {e}");

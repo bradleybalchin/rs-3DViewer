@@ -3,6 +3,7 @@ mod app;
 mod filehandling;
 mod render;
 mod sampling;
+mod math;
 
 fn main() -> eframe::Result {
     // window options

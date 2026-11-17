@@ -85,6 +85,26 @@ pub fn side_panel(ui: &mut egui::Ui, settings: &mut Settings, cloud: Option<&Poi
                 }
             });
 
+            ui.label("Normal Space Sampling");
+            ui.horizontal(|ui| {
+                ui.label("Cell Size");
+                ui.add(
+                    egui::DragValue::new(&mut settings.normal_cell_size)
+                        .speed(0.05)
+                        .range(0.0..=f32::MAX)
+                        .max_decimals(3),
+                );
+                ui.label("Target");
+                ui.add(
+                    egui::DragValue::new(&mut settings.normal_pnt_target)
+                        .speed(0.40)
+                        .range(0..=usize::MAX)
+                        .max_decimals(0),
+                );
+                if ui.button("Apply").clicked() {
+                    action = Some(SidePanelAction::SampleNormalSpace);
+                }
+            });
 
         });
     });
@@ -95,5 +115,6 @@ pub fn side_panel(ui: &mut egui::Ui, settings: &mut Settings, cloud: Option<&Poi
 pub enum SidePanelAction {
     SamplePoission,
     SampleVoxelGrid,
-    SampleVoxelFeatureAware
+    SampleVoxelFeatureAware,
+    SampleNormalSpace,
 }

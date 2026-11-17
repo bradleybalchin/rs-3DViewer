@@ -1,4 +1,5 @@
 use crate::render::vertex::GpuPoint;
+use crate::sampling::normal_space;
 use crate::ui;
 use crate::filehandling;
 use crate::sampling::{poisson,voxel};
@@ -16,7 +17,9 @@ pub struct Settings {
 
     pub poission_radius: f32,
     pub voxel_resolution: f32,
-    pub voxel_fa_resolution : f32
+    pub voxel_fa_resolution : f32,
+    pub normal_cell_size : f32,
+    pub normal_pnt_target : usize,
 }
 
 impl Default for Settings {
@@ -28,6 +31,8 @@ impl Default for Settings {
             poission_radius:0.0,
             voxel_resolution:0.0,
             voxel_fa_resolution:0.0,
+            normal_cell_size:0.0,
+            normal_pnt_target:0,
         }
     }
 }
@@ -139,6 +144,20 @@ impl ViewerApp {
         }
     }
 
+    fn sample_normal_space(&mut self) {
+        if let Some(cloud) = &self.cloud {
+            match normal_space::sample(&cloud.points, self.settings.normal_cell_size, self.settings.normal_pnt_target) {
+                Ok(pnts) => {
+                    if let Err(e) = self.viewport.set_points(&pnts) {
+                        eprintln!("Failed to upload points: {e}");
+                    }    
+                    self.sample_cloud = Some(SampleInfo { method: "Normal Space Sampling".into(), point_count: pnts.len() });
+                }
+                Err(e) => eprint!("{e}")
+            }
+        }
+    }
+
 }
 
 // renders the viewer app UI
@@ -151,6 +170,7 @@ impl eframe::App for ViewerApp {
             Some(SidePanelAction::SamplePoission) => self.sample_poisson(),
             Some(SidePanelAction::SampleVoxelGrid) => self.sample_voxel_grid(),
             Some(SidePanelAction::SampleVoxelFeatureAware) => self.sample_voxel_fa(),
+            Some(SidePanelAction::SampleNormalSpace) => self.sample_normal_space(),
             None => ()
         }
         self.viewport.ui(ui, &self.settings);

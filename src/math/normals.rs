@@ -31,7 +31,7 @@ impl Position for [f32; 3]  { fn pos(&self) -> [f32; 3] { *self } }
 ///
 /// None when the cell has too few points, or λ3 is repeated (points on a line, or isotropic scatter),
 /// so the normal is not unique. The sign is arbitrary: n and -n are both valid.
-fn estimate_normals<P: Position>(points : &[P], r : f32) -> Vec<Option<DVec3>>{
+pub fn estimate_normals<P: Position>(points : &[P], r : f32) -> Vec<Option<DVec3>>{
 
     // if r is zero, negative or NaN, return no normals
     if r ==0.0 || r.is_sign_negative() || r.is_nan() {
@@ -79,7 +79,7 @@ fn estimate_normals<P: Position>(points : &[P], r : f32) -> Vec<Option<DVec3>>{
         ];
 
         // eigenvalues
-        let [l1, l2, l3] = eigenvalues::sym_eigenvalues(cov).map(|l| l.max(0.0)); // rounding can give tiny negatives
+        let [_, _, l3] = eigenvalues::sym_eigenvalues(cov).map(|l| l.max(0.0)); // rounding can give tiny negatives
         // use smallest eigen vector (direction perpendicular to main 'plane' of data )
         (key, eigenvalues::eigenvector(cov, l3))
 
@@ -89,7 +89,24 @@ fn estimate_normals<P: Position>(points : &[P], r : f32) -> Vec<Option<DVec3>>{
     // TODO, assign normal based in distance to centroid of grid cell and nearby cells?
     points.iter().map(|p| cell_norms[&vg.cell(p.pos())]).collect()
 
-    
+
+}
+
+/// Components with magnitude at or below this count as zero in `canonical`,
+/// so rounding noise near the equator (z ≈ ±1e-17) doesn't decide the sign
+const CANONICAL_EPS: f64 = 1e-9;
+
+/// Choose one sign for a normal, so that `n` and `-n` map to the same vector. \
+/// Estimated normals have an arbitrary sign, but both describe the same surface orientation.
+///
+/// Flips `n` if z < 0. If z ≈ 0 (normal lies in the xy plane), decides on x instead, then y.
+/// `canonical(n) == canonical(-n)` exactly, because `n` and `-n` have the same magnitudes
+/// so always take the same branch.
+pub fn canonical(n: DVec3) -> DVec3 {
+    let flip = if n.z.abs() > CANONICAL_EPS { n.z < 0.0 }
+          else if n.x.abs() > CANONICAL_EPS { n.x < 0.0 }
+          else { n.y < 0.0 };
+    if flip { -n } else { n }
 }
 
 
@@ -101,7 +118,7 @@ use rand::{RngExt, SeedableRng};
 
     use crate::render::vertex::GpuPoint;
 
-    use super::estimate_normals;
+    use super::{estimate_normals, canonical};
 
     // generate random GpuPoint vector for testing
     // points are uniform in a cube of side `extent` centred on the origin, with random colours
@@ -176,4 +193,33 @@ use rand::{RngExt, SeedableRng};
         assert!(ns.iter().all(|n| (n.length() - 1.0).abs() < 1e-9), "r = {r}");
     }
 }
+
+    // n and -n give exactly the same canonical vector, and it is n or -n (length unchanged)
+    #[test]
+    fn canonical_same_for_n_and_minus_n(){
+        let mut rng = rand::rngs::StdRng::seed_from_u64(70);
+        for _ in 0..10_000 {
+            let n = DVec3::new(rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0)).normalize();
+            let c = canonical(n);
+            assert_eq!(c, canonical(-n), "n = {n}");
+            assert!(c == n || c == -n, "n = {n}, canonical = {c}");
+        }
+    }
+
+    // Result points into the upper hemisphere (z >= 0); on the equator x >= 0; on the y axis y >= 0
+    #[test]
+    fn canonical_hemisphere(){
+        assert_eq!(canonical(DVec3::new(0.0, 0.6, -0.8)), DVec3::new(-0.0, -0.6, 0.8));
+        assert_eq!(canonical(DVec3::new(0.0, 0.6,  0.8)), DVec3::new(0.0, 0.6, 0.8));   // already canonical: unchanged
+        assert_eq!(canonical(DVec3::new(-0.6, 0.8, 0.0)), DVec3::new(0.6, -0.8, -0.0)); // z = 0: decided by x
+        assert_eq!(canonical(DVec3::new(0.0, -1.0, 0.0)), DVec3::new(-0.0, 1.0, -0.0)); // z = x = 0: decided by y
+    }
+
+    // Rounding noise in z near the equator is ignored: the sign is decided by x, not by the noise
+    #[test]
+    fn canonical_ignores_rounding_noise(){
+        let a = canonical(DVec3::new(-1.0, 0.0,  1e-17));
+        let b = canonical(DVec3::new(-1.0, 0.0, -1e-17));
+        assert!(a.x > 0.0 && b.x > 0.0, "a = {a}, b = {b}");
+    }
 }

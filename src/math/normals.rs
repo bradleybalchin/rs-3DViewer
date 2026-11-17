@@ -124,19 +124,18 @@ pub fn estimate_normals<P: Position>(points : &[P], r : f32) -> Vec<Option<DVec3
         let reference = closest(true).or_else(|| closest(false))?;
 
         // weighted sum of neighbour normals that face the same way as the reference
-        //  planar_only: leave out mixed cells, whose tilted normal can be within EDGE_COS of the reference
         //  and would otherwise pull points near an edge towards the other surface
         let blend = |planar_only: bool| {
             let mut sum = DVec3::ZERO;
             for &(c, h) in &nbrs {
-                if planar_only && c.variation > MAX_REF_VARIATION { continue; }
+                if planar_only && c.variation > MAX_REF_VARIATION { continue; } // only planar (below variation threshlold)
                 let d = reference.dot(c.normal);
-                if d.abs() < EDGE_COS { continue; }                 // different surface (across an edge): skip
-                let n = if d < 0.0 { -c.normal } else { c.normal }; // make signs agree before adding
-                let w = (-(pos - c.centroid).length_squared() / two_sigma2 - h * h / two_tau2).exp();
-                sum += n * w;
+                if d.abs() < EDGE_COS { continue; }                 // different surface (large enough angle difference)
+                let n = if d < 0.0 { -c.normal } else { c.normal };                                 // make signs agree before adding
+                let w = (-(pos - c.centroid).length_squared() / two_sigma2 - h * h / two_tau2).exp(); // weight of normal
+                sum += n * w;   
             }
-            sum.try_normalize()                                     // None if nothing contributed
+            sum.try_normalize() // normalised sum of weighted normals                                     // None if nothing contributed
         };
         blend(true).or_else(|| blend(false))
     }).collect()

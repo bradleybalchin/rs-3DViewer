@@ -1,6 +1,7 @@
 use crate::render::vertex::GpuPoint;
 use crate::sampling::normal_space;
 use crate::ui;
+use crate::colour;
 use crate::filehandling;
 use crate::sampling::{poisson,voxel};
 
@@ -20,6 +21,7 @@ pub struct Settings {
     pub voxel_fa_resolution : f32,
     pub normal_cell_size : f32,
     pub normal_pnt_target : usize,
+    pub colour_normal_cell_size : f32,
 }
 
 impl Default for Settings {
@@ -33,6 +35,7 @@ impl Default for Settings {
             voxel_fa_resolution:0.0,
             normal_cell_size:0.0,
             normal_pnt_target:0,
+            colour_normal_cell_size:1.0,
         }
     }
 }
@@ -48,7 +51,8 @@ pub struct PointCloudInfo {
 // Details about sampling
 pub struct SampleInfo {
     pub method : String,          // Sampling method
-    pub point_count : usize     // sample point count
+    pub point_count : usize,    // sample point count
+    pub points : Vec<GpuPoint>, // sampled points (original colours), so they can be recoloured
 }
 
 pub struct ViewerApp {
@@ -107,7 +111,7 @@ impl ViewerApp {
                     if let Err(e) = self.viewport.set_points(&pnts) {
                         eprintln!("Failed to upload points: {e}");
                     }    
-                    self.sample_cloud = Some(SampleInfo { method: "Poission".into(), point_count: pnts.len() });
+                    self.sample_cloud = Some(SampleInfo { method: "Poission".into(), point_count: pnts.len(), points: pnts });
                 }
                 Err(e) => eprint!("{e}")
             }
@@ -122,7 +126,7 @@ impl ViewerApp {
                     if let Err(e) = self.viewport.set_points(&pnts) {
                         eprintln!("Failed to upload points: {e}");
                     }    
-                    self.sample_cloud = Some(SampleInfo { method: "Voxel Grid".into(), point_count: pnts.len() });
+                    self.sample_cloud = Some(SampleInfo { method: "Voxel Grid".into(), point_count: pnts.len(), points: pnts });
                 }
                 Err(e) => eprint!("{e}")
             }
@@ -137,7 +141,7 @@ impl ViewerApp {
                     if let Err(e) = self.viewport.set_points(&pnts) {
                         eprintln!("Failed to upload points: {e}");
                     }    
-                    self.sample_cloud = Some(SampleInfo { method: "Voxel Feature Aware".into(), point_count: pnts.len() });
+                    self.sample_cloud = Some(SampleInfo { method: "Voxel Feature Aware".into(), point_count: pnts.len(), points: pnts });
                 }
                 Err(e) => eprint!("{e}")
             }
@@ -151,10 +155,25 @@ impl ViewerApp {
                     if let Err(e) = self.viewport.set_points(&pnts) {
                         eprintln!("Failed to upload points: {e}");
                     }    
-                    self.sample_cloud = Some(SampleInfo { method: "Normal Space Sampling".into(), point_count: pnts.len() });
+                    self.sample_cloud = Some(SampleInfo { method: "Normal Space Sampling".into(), point_count: pnts.len(), points: pnts });
                 }
                 Err(e) => eprint!("{e}")
             }
+        }
+    }
+
+    // Colour the currently shown points (the sample if there is one, otherwise the full cloud) by estimated normal
+    // Works on a copy, so the stored points keep their original colours (re-sampling shows the real colours again)
+    fn colour_normals(&mut self) {
+        let shown = match (&self.sample_cloud, &self.cloud) {
+            (Some(sample), _) => &sample.points,
+            (None, Some(cloud)) => &cloud.points,
+            (None, None) => return,
+        };
+        let mut pnts = shown.clone();
+        colour::normals::colour_by_normals(&mut pnts, self.settings.colour_normal_cell_size);
+        if let Err(e) = self.viewport.set_points(&pnts) {
+            eprintln!("Failed to upload points: {e}");
         }
     }
 
@@ -171,6 +190,9 @@ impl eframe::App for ViewerApp {
             Some(SidePanelAction::SampleVoxelGrid) => self.sample_voxel_grid(),
             Some(SidePanelAction::SampleVoxelFeatureAware) => self.sample_voxel_fa(),
             Some(SidePanelAction::SampleNormalSpace) => self.sample_normal_space(),
+
+            Some(SidePanelAction::ColourNormals) => self.colour_normals(),
+
             None => ()
         }
         self.viewport.ui(ui, &self.settings);

@@ -88,10 +88,13 @@ pub fn estimate_normals<P: Position>(points : &[P], r : f32) -> Vec<Option<DVec3
             a.psum[4] / n - m.y * m.z,   // yz
             a.psum[5] / n - m.z * m.z,   // zz
         ];
+        // normal is eigenvector of smallest eigenvalue (away from main data plane)
         let [l1, l2, l3] = eigenvalues::sym_eigenvalues(cov).map(|l| l.max(0.0));
         let normal = eigenvalues::eigenvector(cov, l3)?;     // None -> cell left out
+        // variation ratio of the smallest eigenvalue to the sum (how close to plane data is)
         let total = l1 + l2 + l3;
         let variation = if total > 0.0 { l3 / total } else { 0.0 };   // 0 = perfect plane, 1/3 = no plane
+        // cell corner alligned centroid
         Some((key, CellPlane { centroid: vg.corner(key) + m, normal, variation }))
     }).collect();
 

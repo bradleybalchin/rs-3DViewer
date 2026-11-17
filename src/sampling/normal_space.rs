@@ -3,6 +3,8 @@
 //! Selects points so that the surface normal vectors are distributed as uniformly
 //! as possible across the angular space
 
+use std::time::Instant;
+
 use rand::{SeedableRng, seq::SliceRandom};
 use rustc_hash::FxHashMap;
 use glam::DVec3;
@@ -33,6 +35,8 @@ type Bucket = (u8, u32, u32);
 /// so orientations that are rare in the input (e.g. a small wall next to a large floor) keep a fair share. \
 /// * Points with no reliable normal get their own bucket, which gets the same share as each direction bucket.
 pub fn sample(points: &Vec<GpuPoint>, r: f32, target: usize) -> Result<Vec<GpuPoint>, String>{
+    let start = Instant::now();
+    eprintln!("[NSS t = {target} r = {:.2}] Beginning Sampling", r);
 
     // Reject zero, negative or NaN r (no normals can be estimated)
     if r.is_nan() || r <= 0.0 {
@@ -71,6 +75,9 @@ pub fn sample(points: &Vec<GpuPoint>, r: f32, target: usize) -> Result<Vec<GpuPo
         // remove groups that ran out, so later rounds only visit groups with points left
         groups.retain(|(_, idx)| !idx.is_empty());
     }
+
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+    eprintln!("[NSS t = {target} r = {:.2}] Input Count: {:?} Sample Count: {:?}, Output, Time: {:.1} ms", r, points.len(), selected.len(), ms(start.elapsed()));
 
     Ok(selected)
 

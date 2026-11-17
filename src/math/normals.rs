@@ -114,10 +114,6 @@ pub fn estimate_normals<P: Position>(points : &[P], r : f32) -> Vec<Option<DVec3
             .map(|c| (c, (pos - c.centroid).dot(c.normal).abs()))
             .collect();
 
-        // reference direction, chosen per point (not per cell): the plane this point lies closest to.
-        //  A roof point in a cell that also holds wall points lies on the roof cells' plane, so it picks the roof
-        //  even though its own cell's (mixed) normal is wall-ish.
-        //  Prefer clean, planar cells; fall back to any cell when there are none nearby (e.g. on a tight curve).
 
         // return the closes normal to the plane the point lies on
         let closest = |planar_only: bool| nbrs.iter()

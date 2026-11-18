@@ -23,7 +23,7 @@ pub(super) struct UniformBufferObject
 
 // single point (position + colour)
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, Pod, Zeroable, Debug)]
 pub struct GpuPoint {
     pub pos: [f32; 3], // relative to `origin`
     pub color: u32,    // packed RGBA8

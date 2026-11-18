@@ -6,6 +6,7 @@ use rustc_hash::FxHashMap;
 use std::{time::Instant};
 use crate::render::vertex::GpuPoint;
 use crate::math::eigenvalues;
+use crate::math::grid::{VoxelGrid,Acc};
 use glam::{DVec3};
 
 /// Grid sampling : all points within a voxel are replaced with a single representive point (average of grid members) \
@@ -20,7 +21,7 @@ pub fn sample_grid(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<GpuPoint>, 
     if res == 0.0 {return Ok(points.clone())}
 
     // create voxel grid (vg provides cell mappings for hashmap)
-    let vg = VoxelGrid::new(points, res);
+    let vg = VoxelGrid::new(points.iter().map(|p| p.pos), res);
     let mut grid: FxHashMap<[i32; 3], Acc> = FxHashMap::default();
 
     // for each point, find grid cell and add position and colour to accumulator for that grid cell
@@ -57,7 +58,7 @@ pub fn sample_feature_aware(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<Gp
     if res == 0.0 {return Ok(points.clone())}
 
     // create voxel grid (vg provides cell mappings for hashmap)
-    let vg = VoxelGrid::new(points, res);
+    let vg = VoxelGrid::new(points.iter().map(|p| p.pos), res);
     let mut grid: FxHashMap<[i32; 3], Acc> = FxHashMap::default();
 
     // covariance matrix calulation
@@ -172,39 +173,6 @@ pub fn sample_feature_aware(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<Gp
 
 }
 
-// Voxel grid, finds min value for bounding and performs cell mapping
-#[derive(Clone, Copy)]
-pub struct VoxelGrid { min: [f32; 3], res: f32 }
-
-impl VoxelGrid {
-    pub fn new(points: &[GpuPoint], res: f32) -> Self {
-        let min = points.iter().fold([f32::INFINITY; 3], |m, p| {
-            [m[0].min(p.pos[0]), m[1].min(p.pos[1]), m[2].min(p.pos[2])]
-        });
-        Self { min, res }
-    }
-
-    /// Position of a cell's minimum corner, in f64
-    #[inline]
-    pub fn corner(&self, key: [i32; 3]) -> DVec3 {
-        let res = self.res as f64;
-        DVec3::new(
-            self.min[0] as f64 + key[0] as f64 * res,
-            self.min[1] as f64 + key[1] as f64 * res,
-            self.min[2] as f64 + key[2] as f64 * res,
-        )
-    }
-
-    // inline - optimise by replacing function call with copy of funciton body at compile time
-    /// Map float positions to voxel grid cells
-    #[inline]
-    pub fn cell(&self, p: [f32; 3]) -> [i32; 3] {
-        [((p[0] - self.min[0]) / self.res).floor() as i32,
-         ((p[1] - self.min[1]) / self.res).floor() as i32,
-         ((p[2] - self.min[2]) / self.res).floor() as i32]
-    }
-}
-
 
 /// Minimum points in a cell for its covariance to be trusted; below this a cell is treated as flat
 const MIN_FEATURE_POINTS: u32 = 5;
@@ -245,7 +213,7 @@ struct Cell {
     feature: bool,   // true if the cell is not flat (edge, corner, scatter)
 }
 
-/// Surface variation σ = λ3 / (λ1 + λ2 + λ3) of a covariance matrix [xx, xy, xz, yy, yz, zz].
+/// Surface variation Ïƒ = Î»3 / (Î»1 + Î»2 + Î»3) of a covariance matrix [xx, xy, xz, yy, yz, zz].
 /// 0 for a perfect plane (or line), up to 1/3 for isotropic scatter.
 fn surface_variation(cov: [f64; 6]) -> f64 {
     let [l1, l2, l3] = eigenvalues::sym_eigenvalues(cov).map(|l| l.max(0.0)); // rounding can give tiny negatives
@@ -253,14 +221,7 @@ fn surface_variation(cov: [f64; 6]) -> f64 {
     if sum > 0.0 { l3 / sum } else { 0.0 } // sum = 0: all points identical
 }
 
-// Accmulation of posisitions and colour values for a grid cell (n is number of points)
-#[derive(Default)]
-struct Acc { 
-    sum: [f64; 3],  // sum of positions
-    rgba: [u64; 4], // sum of rgb byte values
-    n: u32,         // number of points
-    psum : [f64;6]  // sum of products of positions (for covariance calculations) (xx,xy,xz,yy,yz,zz)
-}
+
 
 #[cfg(test)]
 mod tests {

@@ -13,7 +13,7 @@ use glam::{DVec3};
 /// This function is O(N)
 pub fn sample_grid(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<GpuPoint>, String> {
     let start = Instant::now(); // timing
-    eprintln!("Voxel Grid Sampling res = {:.2}] Beginning Sampling", res);
+    eprintln!("[Voxel Grid Sampling res = {:.2}] Beginning Sampling", res);
     // Reject negative or NaN values for resolution
     if res.is_nan() || res.is_sign_negative() {
         return Err("resolution must be positive".into());
@@ -50,7 +50,7 @@ pub fn sample_grid(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<GpuPoint>, 
 /// and then preserve more detaile in areas of higher features
 pub fn sample_feature_aware(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<GpuPoint>, String> {
     let start = Instant::now(); // timing
-    eprintln!("Voxel Grid Sampling res = {:.2}] Beginning Sampling", res);
+    eprintln!("[Voxel Feature Aware Sampling res = {:.2}] Beginning Sampling", res);
     // Reject negative or NaN values for resolution
     if res.is_nan() || res.is_sign_negative() {
         return Err("resolution must be positive".into());

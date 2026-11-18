@@ -2,6 +2,8 @@
 //! 
 //! Gpu point and binding / attribute descriptions, uniform buffer object
 
+use std::{hash::{Hash, Hasher}};
+
 use ash::vk;
 use glam::{Mat4};
 use bytemuck::{Pod, Zeroable};
@@ -59,4 +61,24 @@ impl GpuPoint {
         ]
     }
 
+}
+
+impl PartialEq for GpuPoint {
+    fn eq(&self, other: &Self) -> bool {
+        self.pos == other.pos && self.color == other.color
+    }
+}
+
+// For this to hold, must ensure strictly 3D coordinates (positions never contain NaN)
+// Or can enforce NaN the same in partialEq using bytes
+impl Eq for GpuPoint {}
+
+impl Hash for GpuPoint {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Convert floats to bits before passing to the hasher
+        self.pos[0].to_bits().hash(state);
+        self.pos[1].to_bits().hash(state);
+        self.pos[2].to_bits().hash(state);
+        self.color.hash(state);
+    }
 }

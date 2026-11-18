@@ -2,6 +2,9 @@ mod ui;
 mod app;
 mod filehandling;
 mod render;
+mod sampling;
+mod math;
+mod colour;
 
 fn main() -> eframe::Result {
     // window options

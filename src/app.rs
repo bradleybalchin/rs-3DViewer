@@ -5,7 +5,6 @@ use crate::colour;
 use crate::filehandling;
 use crate::sampling::{poisson,voxel};
 
-use rand::seq::IndexedRandom;
 use ui::menu_bar::{MenuAction, menu_bar};
 use ui::side_panel::{SidePanelAction, side_panel};
 use ui::viewport::Viewport;

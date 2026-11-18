@@ -47,7 +47,8 @@ pub fn sample_grid(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<GpuPoint>, 
 }
 
 /// Feature Aware Sampling: for each voxel, calculate how "featured" it is (e.g. not a flat plane) 
-/// and then preserve more detaile in areas of higher features
+/// and then preserve more detaile in areas of higher features \
+/// This function is O(N)
 pub fn sample_feature_aware(points : &Vec<GpuPoint>, res : f32) -> Result<Vec<GpuPoint>, String> {
     let start = Instant::now(); // timing
     eprintln!("[Voxel Feature Aware Sampling res = {:.2}] Beginning Sampling", res);

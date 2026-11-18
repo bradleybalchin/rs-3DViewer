@@ -28,6 +28,7 @@ type Bucket = (u8, u32, u32);
 /// `target` is the number of output points \
 ///
 ///  Samples points uniformly across normal angular space
+///  This function is O(N)
 /// 
 /// ### Method
 /// * Estimate normals for each point \

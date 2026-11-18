@@ -124,7 +124,23 @@ pub fn side_panel(ui: &mut egui::Ui, settings: &mut Settings, cloud: Option<&Poi
                             action = Some(SidePanelAction::SampleNormalSpace);
                     }
 
+                    ui.add_space(1.5);
+                    ui.separator();
+                    ui.add_space(1.5);
 
+                    ui.label("Farthest Point Sampling");
+                    ui.horizontal(|ui| {
+                        ui.label("Target   ");
+                        ui.add(
+                            egui::DragValue::new(&mut settings.farthest_pnt_target)
+                                .speed(0.40)
+                                .range(0..=usize::MAX)
+                                .max_decimals(0),
+                        );
+                    });
+                    if ui.button("Apply").clicked() {
+                            action = Some(SidePanelAction::SampleFarthestPoint);
+                    }
                 }
             );
            
@@ -163,6 +179,7 @@ pub enum SidePanelAction {
     SampleVoxelGrid,
     SampleVoxelFeatureAware,
     SampleNormalSpace,
+    SampleFarthestPoint,
 
     ColourNormals,
 }

@@ -1,4 +1,5 @@
 use crate::render::vertex::GpuPoint;
+use crate::sampling::farthest_point;
 use crate::sampling::normal_space;
 use crate::ui;
 use crate::colour;
@@ -20,6 +21,7 @@ pub struct Settings {
     pub voxel_fa_resolution : f32,
     pub normal_cell_size : f32,
     pub normal_pnt_target : usize,
+    pub farthest_pnt_target : usize,
     pub colour_normal_cell_size : f32,
 }
 
@@ -34,6 +36,8 @@ impl Default for Settings {
             voxel_fa_resolution:0.0,
             normal_cell_size:0.0,
             normal_pnt_target:0,
+            farthest_pnt_target:0,
+
             colour_normal_cell_size:1.0,
         }
     }
@@ -161,6 +165,20 @@ impl ViewerApp {
         }
     }
 
+    fn sample_farthest_point(&mut self) {
+        if let Some(cloud) = &self.cloud {
+            match farthest_point::sample(&cloud.points, self.settings.farthest_pnt_target) {
+                Ok(pnts) => {
+                    if let Err(e) = self.viewport.set_points(&pnts) {
+                        eprintln!("Failed to upload points: {e}");
+                    }    
+                    self.sample_cloud = Some(SampleInfo { method: "Furthest Point Sampling".into(), point_count: pnts.len(), points: pnts });
+                }
+                Err(e) => eprint!("{e}")
+            }
+        }
+    }
+
     // Colour the currently shown points (the sample if there is one, otherwise the full cloud) by estimated normal
     // Works on a copy, so the stored points keep their original colours (re-sampling shows the real colours again)
     fn colour_normals(&mut self) {
@@ -189,6 +207,7 @@ impl eframe::App for ViewerApp {
             Some(SidePanelAction::SampleVoxelGrid) => self.sample_voxel_grid(),
             Some(SidePanelAction::SampleVoxelFeatureAware) => self.sample_voxel_fa(),
             Some(SidePanelAction::SampleNormalSpace) => self.sample_normal_space(),
+            Some(SidePanelAction::SampleFarthestPoint) => self.sample_farthest_point(),
 
             Some(SidePanelAction::ColourNormals) => self.colour_normals(),
 

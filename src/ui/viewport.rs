@@ -27,10 +27,10 @@ impl Viewport {
     }
 
     /// Replace the points being drawn
-    pub fn set_points(&mut self, points: &[GpuPoint]) -> Result<(), String> {
+    pub fn set_points(&mut self, points: &[GpuPoint], reset_camera : bool) -> Result<(), String> {
         let Some(renderer) = &mut self.renderer else { return Ok(()) };
         renderer.upload_vertices(points)?;
-        self.camera.frame(renderer.scene_radius());
+        if reset_camera {self.camera.frame(renderer.scene_radius());}
         Ok(())
     }
 

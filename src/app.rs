@@ -90,7 +90,7 @@ impl ViewerApp {
             println!("picked: {:?}", path);
             match filehandling::laz::load(&path) {
                 Ok(msg) => {
-                    if let Err(e) = self.viewport.set_points(&msg.points) {
+                    if let Err(e) = self.viewport.set_points(&msg.points,true) {
                         eprintln!("Failed to upload points: {e}");
                     }
                     let count = msg.points.len();
@@ -112,7 +112,7 @@ impl ViewerApp {
         if let Some(cloud) = &self.cloud{
             match poisson::sample(&cloud.points, self.settings.poission_radius) {
                 Ok(pnts) => {
-                    if let Err(e) = self.viewport.set_points(&pnts) {
+                    if let Err(e) = self.viewport.set_points(&pnts, false) {
                         eprintln!("Failed to upload points: {e}");
                     }    
                     self.sample_cloud = Some(SampleInfo { method: "Poission".into(), point_count: pnts.len(), points: pnts });
@@ -127,7 +127,7 @@ impl ViewerApp {
         if let Some(cloud) = &self.cloud{
             match voxel::sample_grid(&cloud.points, self.settings.voxel_resolution) {
                 Ok(pnts) => {
-                    if let Err(e) = self.viewport.set_points(&pnts) {
+                    if let Err(e) = self.viewport.set_points(&pnts, false) {
                         eprintln!("Failed to upload points: {e}");
                     }    
                     self.sample_cloud = Some(SampleInfo { method: "Voxel Grid".into(), point_count: pnts.len(), points: pnts });
@@ -142,7 +142,7 @@ impl ViewerApp {
         if let Some(cloud) = &self.cloud{
             match voxel::sample_feature_aware(&cloud.points, self.settings.voxel_fa_resolution) {
                 Ok(pnts) => {
-                    if let Err(e) = self.viewport.set_points(&pnts) {
+                    if let Err(e) = self.viewport.set_points(&pnts, false) {
                         eprintln!("Failed to upload points: {e}");
                     }    
                     self.sample_cloud = Some(SampleInfo { method: "Voxel Feature Aware".into(), point_count: pnts.len(), points: pnts });
@@ -156,7 +156,7 @@ impl ViewerApp {
         if let Some(cloud) = &self.cloud {
             match normal_space::sample(&cloud.points, self.settings.normal_cell_size, self.settings.normal_pnt_target) {
                 Ok(pnts) => {
-                    if let Err(e) = self.viewport.set_points(&pnts) {
+                    if let Err(e) = self.viewport.set_points(&pnts,false) {
                         eprintln!("Failed to upload points: {e}");
                     }    
                     self.sample_cloud = Some(SampleInfo { method: "Normal Space Sampling".into(), point_count: pnts.len(), points: pnts });
@@ -170,7 +170,7 @@ impl ViewerApp {
         if let Some(cloud) = &self.cloud {
             match farthest_point::sample(&cloud.points, self.settings.farthest_pnt_target) {
                 Ok(pnts) => {
-                    if let Err(e) = self.viewport.set_points(&pnts) {
+                    if let Err(e) = self.viewport.set_points(&pnts, false) {
                         eprintln!("Failed to upload points: {e}");
                     }    
                     self.sample_cloud = Some(SampleInfo { method: "Furthest Point Sampling".into(), point_count: pnts.len(), points: pnts });
@@ -190,7 +190,7 @@ impl ViewerApp {
         };
         let mut pnts = shown.clone();
         colour::normals::colour_by_normals(&mut pnts, self.settings.colour_normal_cell_size);
-        if let Err(e) = self.viewport.set_points(&pnts) {
+        if let Err(e) = self.viewport.set_points(&pnts,false) {
             eprintln!("Failed to upload points: {e}");
         }
     }
@@ -216,6 +216,6 @@ impl eframe::App for ViewerApp {
         }
         self.viewport.ui(ui, &self.settings);
 
-        progress_bar(ui, "Poisson Disk Sampling", "Loading Points", 0.1);
+        //progress_bar(ui, "Poisson Disk Sampling", "Loading Points", 0.1);
     }
 }

@@ -5,6 +5,7 @@ use crate::ui;
 use crate::colour;
 use crate::filehandling;
 use crate::sampling::{poisson,voxel};
+use crate::ui::progress_bar::progress_bar;
 
 use ui::menu_bar::{MenuAction, menu_bar};
 use ui::side_panel::{SidePanelAction, side_panel};
@@ -214,5 +215,7 @@ impl eframe::App for ViewerApp {
             None => ()
         }
         self.viewport.ui(ui, &self.settings);
+
+        progress_bar(ui, "Poisson Disk Sampling", "Loading Points", 0.1);
     }
 }

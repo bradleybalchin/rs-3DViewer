@@ -6,6 +6,8 @@
 
 use std::time::Instant;
 
+use rand::{RngExt, SeedableRng};
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rustc_hash::FxHashSet;
 
 use crate::render::vertex::GpuPoint;
@@ -24,18 +26,56 @@ pub fn sample(points: &Vec<GpuPoint>, target: usize) -> Result<Vec<GpuPoint>, St
     let start = Instant::now();
     eprintln!("[FPS t = {target} ] Beginning Sampling");
 
-    let points: FxHashSet<&GpuPoint> = FxHashSet::from_iter(points.iter());
-    let selected = Vec::new();
+    // target = 0 -> empty; target >= N -> every point
+    if target == 0 || points.is_empty() { return Ok(vec![]); }
+    if target >= points.len() { return Ok(points.clone()); } // target = 0 -> empty output
 
 
+    // min_dist[i] = squared distance from point i to its nearest selected point
+    let mut min_dist = vec![f32::INFINITY; points.len()];
+    let mut selected: Vec<GpuPoint> = Vec::with_capacity(target);
+
+    // random first point
+    let mut rng = rand::rngs::StdRng::seed_from_u64(444);
+    let mut last = rng.random_range(0..points.len());
+
+    loop {
+        selected.push(points[last]);            // add the last checked point
+        min_dist[last] = f32::NEG_INFINITY;     // never taken again
+        if selected.len() == target {break;}    
+
+        // update min distances against newly added point
+        let new_pos = points[last].pos;
+
+        let (best, _) = min_dist
+            .par_iter_mut()
+            .zip(points.par_iter())
+            .enumerate()
+            // skip already-selected
+            .filter(|(_, (md, _))| **md != f32::NEG_INFINITY)  
+            // update nearest-selected distance
+            .map(|(i, (md, p))| {
+                *md = md.min(dist2(p.pos, new_pos));                  
+                (i, *md)
+            })
+            // farthest wins; on a tie the lower index wins, so the result is the same on every run
+            .max_by(|(ia, a), (ib, b)| a.total_cmp(b).then(ib.cmp(ia)))
+            .unwrap(); // safe: target < points.len(), so unselected points remain
+
+        last = best;
+    }
 
 
     let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
-    eprintln!("[NSS t = {target}] Input Count: {:?} Sample Count: {:?}, Output, Time: {:.1} ms", points.len(), selected.len(), ms(start.elapsed()));
+    eprintln!("[FPS t = {target} ] Input Count: {:?} Sample Count: {:?}, Output, Time: {:.1} ms", points.len(), selected.len(), ms(start.elapsed()));
     Ok(selected)
 
 }
 
+/// Calculate distance between two point positions and return the squared result r2
+fn dist2(v1 : [f32;3], v2 : [f32;3]) -> f32 {
+    v1.iter().zip(v2).map(|(x, y)| (x-y).powi(2)).sum::<f32>()
+}
 
 
 #[cfg(test)]
@@ -43,8 +83,8 @@ mod tests {
 
     use std::collections::HashSet;
 
-use rand::{RngExt, SeedableRng};
-    use crate::{render::vertex::GpuPoint, sampling::farthest_point::tests};
+    use rand::{RngExt, SeedableRng};
+    use crate::{render::vertex::GpuPoint};
     use super::sample;
 
     // generate random GpuPoint vector for testing
@@ -108,7 +148,7 @@ use rand::{RngExt, SeedableRng};
         assert_eq!(s, vec![], "sample not empty for the target = 0");
     }
 
-    
+
 
 
 }
